@@ -1,5 +1,12 @@
 # GBF Roadmap
 
+## Current Status — 2026-04-03
+
+| Milestone | Status | Notes |
+|-----------|--------|-------|
+| M0 Foundations | 🔄 In progress | M0.1–M0.6 done, M0.7 (experiments) pending |
+| M1–M9 | ⬜ Not started | |
+
 ## Overview
 
 10 milestones from foundations to production-ready system. Each milestone

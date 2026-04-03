@@ -12,7 +12,7 @@ None (first milestone).
 
 ## Sub-steps
 
-### M0.1 — Repository Restructure
+### M0.1 — Repository Restructure ✅
 
 Create the Go module and package structure:
 
@@ -36,7 +36,7 @@ gbf/
 
 Port data structures from `legacy/gbf.go`. Keep legacy/ intact.
 
-### M0.2 — Store Interface
+### M0.2 — Store Interface ✅
 
 Define the minimal `Store` interface in `store.go`:
 - `UpsertPosition(ctx, BaseRecord, boardHash) (int64, error)`
@@ -45,27 +45,27 @@ Define the minimal `Store` interface in `store.go`:
 
 Start with 3 methods. Grow in later milestones.
 
-### M0.3 — SQL Schema (DDL)
+### M0.3 — SQL Schema (DDL) ✅
 
 Write `sqlite/schema.sql` with the 5 tables from ARCHITECTURE.md:
 positions, analyses, matches, games, moves.
 
 Include all indexes defined in the architecture.
 
-### M0.4 — SQLiteStore
+### M0.4 — SQLiteStore ✅
 
 Implement `SQLiteStore` in `sqlite/sqlite.go`:
 - `NewSQLiteStore(path string) (*SQLiteStore, error)` — open/create DB, run DDL
 - `Close() error`
 - WAL mode enabled by default
 
-### M0.5 — Board-Only Zobrist Hash
+### M0.5 — Board-Only Zobrist Hash ✅
 
 Add `ComputeBoardOnlyZobrist(BaseRecord) uint64` to `zobrist.go`.
 Same PRNG seed and key tables as the context-aware hash, but skip
 XOR contributions from: side_to_move, cubeLog2, cubeOwner, awayX, awayO.
 
-### M0.6 — Port Data Structures
+### M0.6 — Port Data Structures ✅
 
 Copy and adapt from `legacy/gbf.go`:
 - BaseRecord, AnalysisBlock, Match, Game, Move, PositionState
@@ -74,7 +74,7 @@ Copy and adapt from `legacy/gbf.go`:
 
 Preserve all constants (block types, move encoding, cube actions).
 
-### M0.7 — Validation Experiments
+### M0.7 — Validation Experiments ⬜
 
 **Exp 1: Schema vs Target Queries**
 
@@ -119,61 +119,61 @@ Extrapolate to 166K files. Flag if import > 24h or query > 5s.
 
 ## Files to Create/Modify
 
-| File | Action |
-|------|--------|
-| `go.mod` | Create (new module) |
-| `gbf.go` | Create (port from legacy) |
-| `zobrist.go` | Create (port + board-only hash) |
-| `record.go` | Create (port from legacy) |
-| `hash.go` | Create (port from legacy) |
-| `store.go` | Create (Store interface) |
-| `sqlite/sqlite.go` | Create (SQLiteStore) |
-| `sqlite/schema.sql` | Create (DDL) |
+| File | Action | Status |
+|------|--------|--------|
+| `go.mod` | Create (new module) | ✅ |
+| `gbf.go` | Create (port from legacy) | ✅ |
+| `zobrist.go` | Create (port + board-only hash) | ✅ |
+| `record.go` | Create (port from legacy) | ✅ |
+| `hash.go` | Create (port from legacy) | ✅ |
+| `store.go` | Create (Store interface) | ✅ |
+| `sqlite/sqlite.go` | Create (SQLiteStore) | ✅ |
+| `sqlite/schema.sql` | Create (DDL) | ✅ |
 
 ## Acceptance Criteria
 
-- [ ] `go build ./...` succeeds
-- [ ] `SQLiteStore` opens, creates tables, closes without error
-- [ ] Board-only Zobrist: same board with different cube/score → same hash
-- [ ] Board-only Zobrist: different boards → different hash
+- [x] `go build ./...` succeeds
+- [x] `SQLiteStore` opens, creates tables, closes without error
+- [x] Board-only Zobrist: same board with different cube/score → same hash
+- [x] Board-only Zobrist: different boards → different hash
 - [ ] All 4 validation experiments completed with documented results
 
 ## Tests
 
 ### Unit Tests
 
-**[U] SQLiteStore lifecycle**
+**[U] SQLiteStore lifecycle** ✅
 Open SQLiteStore on temp file, verify all 5 tables exist via
 `SELECT name FROM sqlite_master WHERE type='table'`, close.
 Success: 5 tables returned, no error.
 
-**[U] Schema constraints**
+**[U] Schema constraints** ✅
 Insert a position, then insert a duplicate zobrist_hash with
 INSERT OR IGNORE. Success: no error, count unchanged.
 
-**[U] Board-only Zobrist — same board, different context**
+**[U] Board-only Zobrist — same board, different context** ✅
 Create two BaseRecords: identical board/bar/borne-off, but different
 CubeLog2, CubeOwner, AwayX, AwayO, SideToMove.
 Success: ComputeBoardOnlyZobrist returns the same value for both.
 
-**[U] Board-only Zobrist — different boards**
+**[U] Board-only Zobrist — different boards** ✅
 Create two BaseRecords with different point counts.
 Success: ComputeBoardOnlyZobrist returns different values.
 
-**[U] Context-aware Zobrist — preserved from legacy**
+**[U] Context-aware Zobrist — preserved from legacy** ✅
 Compute Zobrist on the standard opening position using both legacy
 and new code. Success: identical hash values.
 
 ### Functional Tests
 
-**[F] Full schema creation**
+**[F] Full schema creation** ✅
 Create SQLiteStore, verify all tables and indexes exist, insert one
 row in each table, query it back. Success: round-trip works.
 
-**[F] Validation Exp 1 — queries work**
+**[F] Validation Exp 1 — queries work** ⬜
 Import 10 XG files, run the 3 target queries. Success: no SQL errors,
 results are non-empty.
 
-**[F] Validation Exp 3 — UMAP produces output**
+**[F] Validation Exp 3 — UMAP produces output** ⬜
 Export 10K positions, run UMAP. Success: output has 2 columns, no NaN,
 file saved as PNG.
