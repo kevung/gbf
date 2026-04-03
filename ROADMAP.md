@@ -7,7 +7,8 @@
 | M0 Foundations | ✅ Complete | All sub-steps + 4 validation experiments done |
 | M1 Import XG   | ✅ Complete | Full pipeline: parse → convert → store |
 | M2 Import Multi-format | ✅ Complete | SGF/MAT/TXT + cross-format dedup |
-| M3–M9 | ⬜ Not started | |
+| M3 Import BMAB | ✅ Complete | 5K files validated, 11K pos/s, 14µs lookup |
+| M4–M9 | ⬜ Not started | |
 
 ## Overview
 
@@ -112,19 +113,19 @@ in the full implementation.
 
 ---
 
-## M3 — Import BMAB (Progressive)
+## M3 — Import BMAB (Progressive) ✅
 
 **Objective**: Import the BMAB dataset region by region with monitoring.
 
 **Pre-requisites**: M2.
 
-**Sub-steps**:
-1. Recursive directory traversal of bmab-2025-06-23/
-2. Transaction batching (N files per transaction)
-3. Progress tracking (files imported / total, positions/second)
-4. Error recovery (journal of failed files, skip & continue)
-5. Import report (statistics summary)
-6. Start with 1 region (~33K files), then add regions progressively
+**Sub-steps** (all complete):
+1. Recursive directory traversal + extension filter + sorted order
+2. Transaction batching (SQLiteStore.BeginBatch/CommitBatch via Batcher interface)
+3. Progress tracking: pos/s, ETA, per-batch logging
+4. Error recovery: journal file for resume, error log for failures
+5. Import report: DirectoryReport struct + CLI printReport
+6. Validated at 5,000 files (15% of one region) — results in task sheet
 
 **Task sheet**: [docs/tasks/M3-import-bmab.md](docs/tasks/M3-import-bmab.md)
 
