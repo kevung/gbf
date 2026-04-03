@@ -89,6 +89,15 @@ func convertXGMove(xgMove *xgparser.Move, xgGame *xgparser.Game, matchLength int
 
 		if len(xgMove.CheckerMove.Analysis) > 0 {
 			mv.CheckerAnalysis = convertXGCheckerAnalysis(xgMove.CheckerMove.Analysis)
+			if len(mv.CheckerAnalysis.Moves) > 0 {
+				mv.BestEquity = mv.CheckerAnalysis.Moves[0].Equity
+				mv.PlayedEquity = findPlayedEquity(xgMove.CheckerMove.PlayedMove, xgMove.CheckerMove.Analysis, mv.CheckerAnalysis)
+				diff := mv.BestEquity - mv.PlayedEquity
+				if diff < 0 {
+					diff = -diff
+				}
+				mv.EquityDiff = diff
+			}
 		}
 
 	case "cube":
@@ -162,7 +171,12 @@ func convertXGPosition(xgPos xgparser.Position, xgGame *xgparser.Game, matchLeng
 		pos.MatchLength = int(matchLength)
 	}
 
-	for i := 0; i < 24; i++ {
+	// XG Checkers encoding (1-indexed):
+	//   Checkers[0]    = opponent's bar
+	//   Checkers[1-24] = points 1-24 from the active player's perspective
+	//   Checkers[25]   = active player's bar
+	// Positive = active player's checkers, negative = opponent's checkers.
+	for i := 1; i <= 24; i++ {
 		checkerCount := xgPos.Checkers[i]
 		if checkerCount == 0 {
 			continue
@@ -170,9 +184,11 @@ func convertXGPosition(xgPos xgparser.Position, xgGame *xgparser.Game, matchLeng
 
 		var gbfIndex int
 		if activeGBF == gbf.PlayerO {
-			gbfIndex = 23 - i
+			// O's point i (from O's view) → GBF index (24-i)
+			gbfIndex = 24 - i
 		} else {
-			gbfIndex = i
+			// X's point i → GBF index (i-1)
+			gbfIndex = i - 1
 		}
 
 		var ownerSign int
@@ -194,7 +210,7 @@ func convertXGPosition(xgPos xgparser.Position, xgGame *xgparser.Game, matchLeng
 	}
 
 	activeBar := int(absInt8(xgPos.Checkers[25]))
-	opponentBar := int(absInt8(xgPos.Checkers[24]))
+	opponentBar := int(absInt8(xgPos.Checkers[0]))
 
 	if activeGBF == gbf.PlayerX {
 		pos.BarX = activeBar
@@ -240,6 +256,33 @@ func absInt8(x int8) int8 {
 		return -x
 	}
 	return x
+}
+
+// findPlayedEquity returns the equity (x10000) of the move actually played.
+// It matches the played move encoding against the analysis candidates.
+// Falls back to the best equity if no match is found.
+func findPlayedEquity(played [8]int32, xgAnalysis []xgparser.CheckerAnalysis, cpa *gbf.CheckerPlayAnalysis) int32 {
+	for i, xa := range xgAnalysis {
+		if i >= len(cpa.Moves) {
+			break
+		}
+		match := true
+		for j := 0; j < 8; j++ {
+			if int32(xa.Move[j]) != played[j] {
+				match = false
+				break
+			}
+		}
+		if match {
+			return cpa.Moves[i].Equity
+		}
+	}
+	// No match found: played move was not in the analysis list.
+	// Return best equity (equity_diff = 0).
+	if len(cpa.Moves) > 0 {
+		return cpa.Moves[0].Equity
+	}
+	return 0
 }
 
 func convertXGCheckerAnalysis(xgMoves []xgparser.CheckerAnalysis) *gbf.CheckerPlayAnalysis {

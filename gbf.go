@@ -226,6 +226,10 @@ type Move struct {
 	CheckerAnalysis *CheckerPlayAnalysis
 	CubeAnalysis    *CubeDecisionAnalysis
 	EngineMetadata  *EngineMetadata
+	// Equity columns for DB storage (x10000 scale, computed during conversion).
+	BestEquity   int32 // equity of the best candidate move
+	PlayedEquity int32 // equity of the move actually played
+	EquityDiff   int32 // abs(BestEquity - PlayedEquity), always >= 0
 }
 
 // MoveType identifies the type of action.

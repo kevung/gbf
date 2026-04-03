@@ -5,7 +5,8 @@
 | Milestone | Status | Notes |
 |-----------|--------|-------|
 | M0 Foundations | ✅ Complete | All sub-steps + 4 validation experiments done |
-| M1–M9 | ⬜ Not started | |
+| M1 Import XG   | ✅ Complete | Full pipeline: parse → convert → store |
+| M2–M9 | ⬜ Not started | |
 
 ## Overview
 
@@ -75,19 +76,19 @@ in the full implementation.
 
 ---
 
-## M1 — Import XG
+## M1 — Import XG ✅
 
 **Objective**: Working import pipeline for a single XG file into SQLite.
 
 **Pre-requisites**: M0.
 
-**Sub-steps**:
-1. Integrate xgparser into the pipeline
-2. Convert XG Match to GBF records (reuse legacy/convert_xg.go)
-3. Implement UpsertPosition in SQLiteStore
-4. Implement UpsertMatch / Game / Move with extracted analysis columns
-5. End-to-end import of a single .xg file
-6. Error logging and handling
+**Sub-steps** (all complete):
+1. Integrate xgparser v1.3.0 into the pipeline
+2. Convert XG Match to GBF records — fixed 1-indexed Checkers bug vs legacy
+3. UpsertPosition in SQLiteStore (M0.4)
+4. UpsertMatch / InsertGame / InsertMove / AddAnalysis in SQLiteStore
+5. `convert.ImportFile` + `gbf.Importer.ImportMatch` — end-to-end pipeline
+6. Non-fatal errors logged and skipped; fatal errors returned with context
 
 **Task sheet**: [docs/tasks/M1-import-xg.md](docs/tasks/M1-import-xg.md)
 

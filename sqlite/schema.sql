@@ -24,7 +24,8 @@ CREATE TABLE IF NOT EXISTS analyses (
     position_id INTEGER NOT NULL REFERENCES positions(id),
     block_type  INTEGER NOT NULL,
     engine_name TEXT,
-    payload     BLOB    NOT NULL
+    payload     BLOB    NOT NULL,
+    UNIQUE(position_id, block_type)
 );
 
 CREATE TABLE IF NOT EXISTS matches (

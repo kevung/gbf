@@ -93,6 +93,83 @@ func (s *SQLiteStore) UpsertPosition(ctx context.Context, rec gbf.BaseRecord, bo
 	return id, nil
 }
 
+// UpsertMatch inserts a match or ignores if canonical_hash already exists.
+// Returns the match ID (existing or newly inserted).
+func (s *SQLiteStore) UpsertMatch(ctx context.Context, m gbf.Match, matchHash, canonHash string) (int64, error) {
+	_, err := s.db.ExecContext(ctx, `
+		INSERT OR IGNORE INTO matches
+			(match_hash, canonical_hash, source_format, player1, player2, match_length)
+		VALUES (?, ?, 'xg', ?, ?, ?)`,
+		matchHash, canonHash,
+		m.Metadata.Player1Name, m.Metadata.Player2Name,
+		m.Metadata.MatchLength,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("upsert match: %w", err)
+	}
+
+	var id int64
+	err = s.db.QueryRowContext(ctx,
+		`SELECT id FROM matches WHERE canonical_hash = ?`, canonHash,
+	).Scan(&id)
+	if err != nil {
+		return 0, fmt.Errorf("select match id: %w", err)
+	}
+	return id, nil
+}
+
+// InsertGame inserts a game row for the given match. Returns the game ID.
+func (s *SQLiteStore) InsertGame(ctx context.Context, matchID int64, g gbf.Game) (int64, error) {
+	crawford := 0
+	if g.Crawford {
+		crawford = 1
+	}
+	res, err := s.db.ExecContext(ctx, `
+		INSERT INTO games
+			(match_id, game_number, score_x, score_o, winner, points_won, crawford)
+		VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		matchID, g.GameNumber,
+		g.InitialScore[0], g.InitialScore[1],
+		g.Winner, g.PointsWon, crawford,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("insert game: %w", err)
+	}
+	return res.LastInsertId()
+}
+
+// InsertMove inserts a move row linking game → position.
+func (s *SQLiteStore) InsertMove(ctx context.Context, gameID int64, moveNum int, posID int64, mv gbf.Move) error {
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO moves
+			(game_id, move_number, position_id, player, move_type,
+			 dice_1, dice_2, move_string, equity_diff, best_equity, played_equity)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		gameID, moveNum, posID,
+		mv.Player, string(mv.MoveType),
+		mv.Dice[0], mv.Dice[1],
+		mv.MoveString,
+		mv.EquityDiff, mv.BestEquity, mv.PlayedEquity,
+	)
+	if err != nil {
+		return fmt.Errorf("insert move: %w", err)
+	}
+	return nil
+}
+
+// AddAnalysis inserts an analysis block for a position.
+func (s *SQLiteStore) AddAnalysis(ctx context.Context, posID int64, blockType uint8, engineName string, payload []byte) error {
+	_, err := s.db.ExecContext(ctx, `
+		INSERT OR IGNORE INTO analyses (position_id, block_type, engine_name, payload)
+		VALUES (?, ?, ?, ?)`,
+		posID, blockType, engineName, payload,
+	)
+	if err != nil {
+		return fmt.Errorf("add analysis: %w", err)
+	}
+	return nil
+}
+
 // QueryByZobrist returns all positions matching the given context-aware hash.
 func (s *SQLiteStore) QueryByZobrist(ctx context.Context, hash uint64) ([]gbf.Position, error) {
 	rows, err := s.db.QueryContext(ctx,
