@@ -12,7 +12,8 @@
 | M5 Visualization Exploration | ✅ Complete | UMAP/PCA/HDBSCAN on 1.57M pos, 6 clusters, synthesis report |
 | M9 Phase 2 Refinement        | ✅ Complete | 4 derived cols, backfill, indexes, query docs, SPEC v1.0 final |
 | M6 Query API                 | ✅ Complete | 5 Go query methods, Python helper, migration tool |
-| M7–M8 | ⬜ Not started | |
+| M7 PostgreSQL Backend        | ✅ Complete | PGStore + pgxpool, migration SQLite→PG, concurrency tests (race-clean) |
+| M8 Visualization SaaS        | ⬜ Not started | |
 
 ## Overview
 
@@ -206,19 +207,19 @@ Validated on 1.57M positions: 17,904 DMP positions, correct class distribution.
 
 ---
 
-## M7 — PostgreSQL Backend
+## M7 — PostgreSQL Backend ✅
 
 **Objective**: Implement PGStore for production SaaS with concurrent writes.
 
 **Pre-requisites**: M6.
 
 **Sub-steps**:
-1. Implement `PGStore` (connection pool, schema DDL)
-2. Adapt upserts (ON CONFLICT DO NOTHING)
-3. HASH indexes on zobrist_hash, board_hash
-4. Concurrency tests (parallel imports)
-5. Data migration from SQLite to PostgreSQL
-6. Optional partitioning by away scores
+1. ✅ Implement `PGStore` (pgxpool, BeginBatch/CommitBatch/RollbackBatch)
+2. ✅ Adapt upserts (ON CONFLICT DO NOTHING, $N placeholders via toPgParams)
+3. ✅ HASH index on board_hash, B-tree on zobrist_hash (required for ON CONFLICT)
+4. ✅ Concurrency test: 10 goroutines, race detector clean
+5. ✅ `MigrateStore(ctx, src *sql.DB, dst Store, batchSize)` — SQLite→PG
+6. ⬜ Partitioning (skipped — M5 findings don't justify it yet)
 
 **Task sheet**: [docs/tasks/M7-postgresql.md](docs/tasks/M7-postgresql.md)
 

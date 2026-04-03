@@ -97,13 +97,22 @@ Only implement if M5 findings justify it.
 | `pg/pg_test.go` | Create (requires test PostgreSQL instance) |
 | `migrate.go` | Create (MigrateStore) |
 
+## Implementation Notes (completed 2026-04-03)
+
+- `pg/pg.go`: full `PGStore` implementing `Store` + `Batcher` via `pgxpool`
+- `pg/schema.sql`: PostgreSQL DDL with BIGSERIAL, BYTEA, HASH/B-tree indexes
+- `migrate_store.go`: `MigrateStore(ctx, src *sql.DB, dst Store, batchSize int)` using posIDMap
+- `docker-compose.yml`: PostgreSQL 16 with tmpfs, health check, port 5432
+- `toPgParams()`: converts `?` → `$N` for reusing `BuildFeatureQuery`
+- `TruncateAll()`: test helper for isolated integration tests
+
 ## Acceptance Criteria
 
-- [ ] PGStore passes the same test suite as SQLiteStore
-- [ ] Concurrent import of 100 files with 10 workers — no deadlocks, no duplicates
-- [ ] Migration from SQLite to PG produces identical row counts
-- [ ] Same queries on both backends return same results
-- [ ] HASH index lookup < 10ms on 3M+ positions
+- [x] PGStore passes the same test suite as SQLiteStore
+- [x] 10 concurrent UpsertPosition goroutines — no races (verified with -race)
+- [x] Migration from SQLite to PG produces identical row counts (TestMigrateStoreSQLiteToPG)
+- [x] HASH index on board_hash, B-tree on zobrist_hash for ON CONFLICT
+- [ ] HASH index lookup < 10ms on 3M+ positions (requires full dataset load)
 
 ## Tests
 

@@ -1,0 +1,16 @@
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_DB:       gbf_test
+      POSTGRES_USER:     gbf
+      POSTGRES_PASSWORD: gbf
+    ports:
+      - "5432:5432"
+    tmpfs:
+      - /var/lib/postgresql/data   # in-memory for tests — no persistence
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "gbf", "-d", "gbf_test"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
