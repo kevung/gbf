@@ -9,7 +9,8 @@
 | M2 Import Multi-format | ✅ Complete | SGF/MAT/TXT + cross-format dedup |
 | M3 Import BMAB | ✅ Complete | 5K files validated, 11K pos/s, 14µs lookup |
 | M4 Feature Extraction | ✅ Complete | 44-dim vector, .npy + CSV export, normalization |
-| M5–M9 | ⬜ Not started | |
+| M5 Visualization Exploration | ✅ Complete | UMAP/PCA/HDBSCAN on 1.57M pos, 6 clusters, synthesis report |
+| M6–M9 | ⬜ Not started | |
 
 ## Overview
 
@@ -149,20 +150,20 @@ in the full implementation.
 
 ---
 
-## M5 — Visualization Exploration (Jupyter)
+## M5 — Visualization Exploration (Jupyter) ✅
 
 **Objective**: Explore the dataset visually, identify position families and
 discriminant features. Inform Phase 2 decisions.
 
 **Pre-requisites**: M4.
 
-**Sub-steps**:
-1. UMAP-2D notebook on sample (~100K positions)
-2. PCA notebook — variance explained, component analysis
-3. Clustering notebook (HDBSCAN) — identify position families
-4. Color projections by features (pip count, away score, contact/race)
-5. Difficulty map: color by average equity loss
-6. Synthesis report: most discriminant features and recommended query dimensions
+**Sub-steps** (all complete):
+1. Export tool (`cmd/export-features`) → 1.57M positions, 527 MB .npy
+2. UMAP-2D — 3 hyperparameter configs; n=15/d=0.10 recommended; 66s for 100K
+3. PCA — PC1=19% (pip counts), PC3=6% (pip_diff standalone); 8 PCs → 50%
+4. Clustering — HDBSCAN: 6 clusters, 3.4% noise; k-means silhouette=0.391
+5. Difficulty map — contact 4× harder than race, 10× vs bearoff
+6. Synthesis report — 3 M9 schema columns, UMAP hyperparameters, findings
 
 **Task sheet**: [docs/tasks/M5-viz-exploration.md](docs/tasks/M5-viz-exploration.md)
 
