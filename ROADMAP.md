@@ -11,7 +11,8 @@
 | M4 Feature Extraction | ✅ Complete | 44-dim vector, .npy + CSV export, normalization |
 | M5 Visualization Exploration | ✅ Complete | UMAP/PCA/HDBSCAN on 1.57M pos, 6 clusters, synthesis report |
 | M9 Phase 2 Refinement        | ✅ Complete | 4 derived cols, backfill, indexes, query docs, SPEC v1.0 final |
-| M6–M8 | ⬜ Not started | |
+| M6 Query API                 | ✅ Complete | 5 Go query methods, Python helper, migration tool |
+| M7–M8 | ⬜ Not started | |
 
 ## Overview
 
@@ -185,18 +186,21 @@ discriminant features. Inform Phase 2 decisions.
 
 ---
 
-## M6 — Query API
+## M6 — Query API ✅
 
 **Objective**: Complete Go query API and Python helpers for the 3 target queries.
 
-**Pre-requisites**: M1.
+**Pre-requisites**: M1, M9.
 
-**Sub-steps**:
-1. QueryByZobrist / QueryByBoardHash
-2. QueryByMatchScore (away_x, away_o filtering)
-3. QueryByFeatures (composite filters: pip range, cube, bar, equity_diff)
-4. Aggregation queries (global stats, distributions)
-5. Python helpers (pandas DataFrame wrappers)
+**Sub-steps** (all complete):
+1. QueryByZobrist / QueryByBoardHash — returns PositionWithAnalyses
+2. QueryByMatchScore — PositionSummary, wildcard support, composite index
+3. QueryByFeatures — dynamic SQL builder, EquityDiffMin triggers JOIN
+4. Aggregations — QueryScoreDistribution, QueryPositionClassDistribution
+5. Python helper — GBFQuery (7 methods, pandas DataFrames)
+6. migrate-v1 cmd — ALTER TABLE + backfill for pre-M9 databases
+
+Validated on 1.57M positions: 17,904 DMP positions, correct class distribution.
 
 **Task sheet**: [docs/tasks/M6-query-api.md](docs/tasks/M6-query-api.md)
 

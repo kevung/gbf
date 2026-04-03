@@ -7,6 +7,7 @@ import (
 	_ "embed"
 	"fmt"
 	"math/bits"
+	"strings"
 
 	gbf "github.com/kevung/gbf"
 	_ "modernc.org/sqlite"
@@ -227,13 +228,20 @@ func (s *SQLiteStore) AddAnalysis(ctx context.Context, posID int64, blockType ui
 	return nil
 }
 
-// QueryByZobrist returns all positions matching the given context-aware hash.
-func (s *SQLiteStore) QueryByZobrist(ctx context.Context, hash uint64) ([]gbf.Position, error) {
+// positionCols is the standard SELECT column list for the positions table.
+// COALESCE handles rows imported before M9 (NULL derived columns).
+const positionCols = `
+	id, zobrist_hash, board_hash, base_record,
+	pip_x, pip_o, away_x, away_o, cube_log2, cube_owner,
+	bar_x, bar_o, borne_off_x, borne_off_o, side_to_move,
+	COALESCE(pos_class,0), COALESCE(pip_diff,0),
+	COALESCE(prime_len_x,0), COALESCE(prime_len_o,0)`
+
+// QueryByZobrist returns positions matching the context-aware hash,
+// including all associated analysis blocks.
+func (s *SQLiteStore) QueryByZobrist(ctx context.Context, hash uint64) ([]gbf.PositionWithAnalyses, error) {
 	rows, err := s.conn().QueryContext(ctx,
-		`SELECT id, zobrist_hash, board_hash, base_record,
-		        pip_x, pip_o, away_x, away_o, cube_log2, cube_owner,
-		        bar_x, bar_o, borne_off_x, borne_off_o, side_to_move
-		 FROM positions WHERE zobrist_hash = ?`,
+		`SELECT`+positionCols+`FROM positions WHERE zobrist_hash = ?`,
 		int64(hash),
 	)
 	if err != nil {
@@ -241,9 +249,215 @@ func (s *SQLiteStore) QueryByZobrist(ctx context.Context, hash uint64) ([]gbf.Po
 	}
 	defer rows.Close()
 
-	return scanPositions(rows)
+	positions, err := scanPositions(rows)
+	if err != nil {
+		return nil, err
+	}
+	return s.attachAnalyses(ctx, positions)
 }
 
+// QueryByBoardHash returns all context variations (different cube/score) of
+// the same board layout, including analyses.
+func (s *SQLiteStore) QueryByBoardHash(ctx context.Context, hash uint64) ([]gbf.PositionWithAnalyses, error) {
+	rows, err := s.conn().QueryContext(ctx,
+		`SELECT`+positionCols+`FROM positions WHERE board_hash = ?`,
+		int64(hash),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("query by board hash: %w", err)
+	}
+	defer rows.Close()
+
+	positions, err := scanPositions(rows)
+	if err != nil {
+		return nil, err
+	}
+	return s.attachAnalyses(ctx, positions)
+}
+
+// attachAnalyses fetches analysis blocks for each position and bundles them.
+func (s *SQLiteStore) attachAnalyses(ctx context.Context, positions []gbf.Position) ([]gbf.PositionWithAnalyses, error) {
+	result := make([]gbf.PositionWithAnalyses, len(positions))
+	for i, p := range positions {
+		pwa := gbf.PositionWithAnalyses{Position: p}
+
+		rows, err := s.conn().QueryContext(ctx,
+			`SELECT block_type, COALESCE(engine_name,''), payload
+			 FROM analyses WHERE position_id = ?`, p.ID)
+		if err != nil {
+			return nil, fmt.Errorf("query analyses for pos %d: %w", p.ID, err)
+		}
+		for rows.Next() {
+			var a gbf.AnalysisBlock
+			if err := rows.Scan(&a.BlockType, &a.EngineName, &a.Payload); err != nil {
+				rows.Close()
+				return nil, fmt.Errorf("scan analysis: %w", err)
+			}
+			pwa.Analyses = append(pwa.Analyses, a)
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			return nil, err
+		}
+		result[i] = pwa
+	}
+	return result, nil
+}
+
+// QueryByMatchScore returns position summaries filtered by away scores.
+// Use awayX=-1 or awayO=-1 as wildcard (matches any value).
+func (s *SQLiteStore) QueryByMatchScore(ctx context.Context, awayX, awayO int) ([]gbf.PositionSummary, error) {
+	var conds []string
+	var args []any
+	if awayX >= 0 {
+		conds = append(conds, "away_x = ?")
+		args = append(args, awayX)
+	}
+	if awayO >= 0 {
+		conds = append(conds, "away_o = ?")
+		args = append(args, awayO)
+	}
+
+	q := `SELECT id,
+	             COALESCE(pos_class,0), pip_x, pip_o, COALESCE(pip_diff,0),
+	             away_x, away_o, cube_log2, cube_owner, bar_x, bar_o,
+	             COALESCE(prime_len_x,0), COALESCE(prime_len_o,0)
+	      FROM positions`
+	if len(conds) > 0 {
+		q += " WHERE " + strings.Join(conds, " AND ")
+	}
+
+	rows, err := s.conn().QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, fmt.Errorf("query by match score: %w", err)
+	}
+	defer rows.Close()
+
+	var out []gbf.PositionSummary
+	for rows.Next() {
+		var p gbf.PositionSummary
+		if err := rows.Scan(
+			&p.ID, &p.PosClass, &p.PipX, &p.PipO, &p.PipDiff,
+			&p.AwayX, &p.AwayO, &p.CubeLog2, &p.CubeOwner,
+			&p.BarX, &p.BarO, &p.PrimeLenX, &p.PrimeLenO,
+		); err != nil {
+			return nil, fmt.Errorf("scan position summary: %w", err)
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+
+// QueryByFeatures returns positions (with associated moves) matching the filter.
+func (s *SQLiteStore) QueryByFeatures(ctx context.Context, f gbf.QueryFilter) ([]gbf.PositionWithMoves, error) {
+	q, args := gbf.BuildFeatureQuery(f)
+
+	rows, err := s.conn().QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, fmt.Errorf("query by features: %w", err)
+	}
+	defer rows.Close()
+
+	positions, err := scanPositions(rows)
+	if err != nil {
+		return nil, err
+	}
+
+	result := make([]gbf.PositionWithMoves, len(positions))
+	for i, p := range positions {
+		pwm := gbf.PositionWithMoves{Position: p}
+
+		mrows, err := s.conn().QueryContext(ctx,
+			`SELECT id, game_id, move_number, player, COALESCE(move_type,''),
+			        COALESCE(dice_1,0), COALESCE(dice_2,0), COALESCE(move_string,''),
+			        equity_diff, best_equity, played_equity
+			 FROM moves WHERE position_id = ?`, p.ID)
+		if err != nil {
+			return nil, fmt.Errorf("query moves for pos %d: %w", p.ID, err)
+		}
+		for mrows.Next() {
+			var mv gbf.MoveRow
+			var ed, be, pe sql.NullInt64
+			if err := mrows.Scan(
+				&mv.ID, &mv.GameID, &mv.MoveNumber, &mv.Player, &mv.MoveType,
+				&mv.Dice[0], &mv.Dice[1], &mv.MoveString,
+				&ed, &be, &pe,
+			); err != nil {
+				mrows.Close()
+				return nil, fmt.Errorf("scan move: %w", err)
+			}
+			if ed.Valid {
+				v := int(ed.Int64)
+				mv.EquityDiff = &v
+			}
+			if be.Valid {
+				v := int(be.Int64)
+				mv.BestEquity = &v
+			}
+			if pe.Valid {
+				v := int(pe.Int64)
+				mv.PlayedEquity = &v
+			}
+			pwm.Moves = append(pwm.Moves, mv)
+		}
+		mrows.Close()
+		if err := mrows.Err(); err != nil {
+			return nil, err
+		}
+		result[i] = pwm
+	}
+	return result, nil
+}
+
+// QueryScoreDistribution returns position counts and avg equity loss per
+// (away_x, away_o) combination.
+func (s *SQLiteStore) QueryScoreDistribution(ctx context.Context) ([]gbf.ScoreDistribution, error) {
+	rows, err := s.conn().QueryContext(ctx, `
+		SELECT p.away_x, p.away_o,
+		       COUNT(DISTINCT p.id) AS cnt,
+		       COALESCE(AVG(CAST(m.equity_diff AS REAL)), 0) AS avg_diff
+		FROM positions p
+		LEFT JOIN moves m ON m.position_id = p.id
+		GROUP BY p.away_x, p.away_o
+		ORDER BY p.away_x, p.away_o`)
+	if err != nil {
+		return nil, fmt.Errorf("score distribution: %w", err)
+	}
+	defer rows.Close()
+
+	var out []gbf.ScoreDistribution
+	for rows.Next() {
+		var d gbf.ScoreDistribution
+		if err := rows.Scan(&d.AwayX, &d.AwayO, &d.Count, &d.AvgEquityDiff); err != nil {
+			return nil, fmt.Errorf("scan score dist: %w", err)
+		}
+		out = append(out, d)
+	}
+	return out, rows.Err()
+}
+
+// QueryPositionClassDistribution returns position counts per class.
+func (s *SQLiteStore) QueryPositionClassDistribution(ctx context.Context) (map[int]int, error) {
+	rows, err := s.conn().QueryContext(ctx,
+		`SELECT COALESCE(pos_class,0), COUNT(*) FROM positions GROUP BY pos_class`)
+	if err != nil {
+		return nil, fmt.Errorf("class distribution: %w", err)
+	}
+	defer rows.Close()
+
+	dist := make(map[int]int)
+	for rows.Next() {
+		var cls, cnt int
+		if err := rows.Scan(&cls, &cnt); err != nil {
+			return nil, err
+		}
+		dist[cls] += cnt
+	}
+	return dist, rows.Err()
+}
+
+// scanPositions scans a result set into []gbf.Position.
+// Expects the column order defined by positionCols.
 func scanPositions(rows *sql.Rows) ([]gbf.Position, error) {
 	var positions []gbf.Position
 	for rows.Next() {
@@ -257,6 +471,7 @@ func scanPositions(rows *sql.Rows) ([]gbf.Position, error) {
 			&p.CubeLog2, &p.CubeOwner,
 			&p.BarX, &p.BarO, &p.BorneOffX, &p.BorneOffO,
 			&p.SideToMove,
+			&p.PosClass, &p.PipDiff, &p.PrimeLenX, &p.PrimeLenO,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("scan position: %w", err)

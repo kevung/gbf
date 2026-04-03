@@ -119,6 +119,7 @@ type AnalysisBlock struct {
 	BlockType   uint8
 	Version     uint8
 	BlockLength uint16
+	EngineName  string // populated when reading from the DB analyses table
 	Payload     []byte // raw payload; use typed accessors
 }
 
