@@ -6,7 +6,8 @@
 |-----------|--------|-------|
 | M0 Foundations | ✅ Complete | All sub-steps + 4 validation experiments done |
 | M1 Import XG   | ✅ Complete | Full pipeline: parse → convert → store |
-| M2–M9 | ⬜ Not started | |
+| M2 Import Multi-format | ✅ Complete | SGF/MAT/TXT + cross-format dedup |
+| M3–M9 | ⬜ Not started | |
 
 ## Overview
 
@@ -94,18 +95,18 @@ in the full implementation.
 
 ---
 
-## M2 — Import Multi-format
+## M2 — Import Multi-format ✅
 
 **Objective**: Support GnuBG and BGBlitz formats, with cross-format dedup.
 
 **Pre-requisites**: M1.
 
-**Sub-steps**:
-1. Integrate gnubgparser (SGF, MAT)
-2. Integrate bgfparser (BGF, TXT)
-3. Auto-detect format by file extension
-4. Cross-format deduplication via canonical_hash
-5. Verify same match imported from XG and SGF produces one match entry
+**Sub-steps** (all complete):
+1. Integrate gnubgparser v1.2.0 (SGF, MAT)
+2. Integrate bgfparser v1.2.0 (BGF, TXT)
+3. Auto-detect format by file extension (5 extensions)
+4. Cross-format deduplication via canonical_hash (INSERT OR IGNORE)
+5. Verified: charlot1-charlot2 SGF + MAT → 1 match entry, identical hash
 
 **Task sheet**: [docs/tasks/M2-import-multi.md](docs/tasks/M2-import-multi.md)
 
