@@ -16,7 +16,12 @@ CREATE TABLE IF NOT EXISTS positions (
     bar_o        INTEGER,
     borne_off_x  INTEGER,
     borne_off_o  INTEGER,
-    side_to_move INTEGER
+    side_to_move INTEGER,
+    -- M9: derived columns (populated on insert, backfilled by migrate_v1.go)
+    pos_class    INTEGER,            -- 0=contact, 1=race, 2=bearoff
+    pip_diff     INTEGER,            -- pip_x - pip_o (signed)
+    prime_len_x  INTEGER,            -- longest consecutive made-point run (X)
+    prime_len_o  INTEGER             -- longest consecutive made-point run (O)
 );
 
 CREATE TABLE IF NOT EXISTS analyses (
@@ -68,7 +73,7 @@ CREATE TABLE IF NOT EXISTS moves (
     played_equity  INTEGER    -- x10000, played move equity
 );
 
--- Indexes
+-- Core lookup indexes
 CREATE UNIQUE INDEX IF NOT EXISTS idx_positions_zobrist  ON positions(zobrist_hash);
 CREATE        INDEX IF NOT EXISTS idx_positions_board    ON positions(board_hash);
 CREATE        INDEX IF NOT EXISTS idx_positions_away     ON positions(away_x, away_o);
@@ -77,3 +82,16 @@ CREATE        INDEX IF NOT EXISTS idx_matches_player1    ON matches(player1);
 CREATE        INDEX IF NOT EXISTS idx_matches_player2    ON matches(player2);
 CREATE        INDEX IF NOT EXISTS idx_moves_game         ON moves(game_id, move_number);
 CREATE        INDEX IF NOT EXISTS idx_moves_equity_diff  ON moves(equity_diff);
+
+-- M9: derived column indexes
+CREATE INDEX IF NOT EXISTS idx_positions_class
+    ON positions(pos_class);
+
+CREATE INDEX IF NOT EXISTS idx_positions_pip_diff
+    ON positions(pip_diff);
+
+CREATE INDEX IF NOT EXISTS idx_positions_class_away
+    ON positions(pos_class, away_x, away_o);
+
+CREATE INDEX IF NOT EXISTS idx_moves_error
+    ON moves(equity_diff) WHERE equity_diff > 500;

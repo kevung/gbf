@@ -109,12 +109,20 @@ func (s *SQLiteStore) DB() *sql.DB {
 func (s *SQLiteStore) UpsertPosition(ctx context.Context, rec gbf.BaseRecord, boardHash uint64) (int64, error) {
 	blob := gbf.MarshalBaseRecord(&rec)
 
+	// Derived columns (M9): computed once at insert time.
+	derived := gbf.ExtractDerivedFeatures(rec)
+	posClass  := int(derived[9]) // pos_class
+	pipDiff   := int(derived[8]) // pip_diff
+	primeLenX := int(derived[4]) // prime_len_x
+	primeLenO := int(derived[5]) // prime_len_o
+
 	_, err := s.conn().ExecContext(ctx, `
 		INSERT OR IGNORE INTO positions
 			(zobrist_hash, board_hash, base_record,
 			 pip_x, pip_o, away_x, away_o, cube_log2, cube_owner,
-			 bar_x, bar_o, borne_off_x, borne_off_o, side_to_move)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			 bar_x, bar_o, borne_off_x, borne_off_o, side_to_move,
+			 pos_class, pip_diff, prime_len_x, prime_len_o)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		int64(bits.RotateLeft64(rec.Zobrist, 0)), // uint64 → int64 (bit-identical)
 		int64(boardHash),
 		blob,
@@ -124,6 +132,7 @@ func (s *SQLiteStore) UpsertPosition(ctx context.Context, rec gbf.BaseRecord, bo
 		int(rec.BarX), int(rec.BarO),
 		int(rec.BorneOffX), int(rec.BorneOffO),
 		int(rec.SideToMove),
+		posClass, pipDiff, primeLenX, primeLenO,
 	)
 	if err != nil {
 		return 0, fmt.Errorf("upsert position: %w", err)

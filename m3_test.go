@@ -13,7 +13,7 @@ import (
 	"github.com/kevung/gbf/sqlite"
 )
 
-func openSQLiteStore(t *testing.T) *sqlite.SQLiteStore {
+func openSQLiteStore(t testing.TB) *sqlite.SQLiteStore {
 	t.Helper()
 	p := filepath.Join(t.TempDir(), "test.db")
 	store, err := sqlite.NewSQLiteStore(p)
@@ -28,7 +28,7 @@ func xgParser(path string) (*gbf.Match, error) {
 	return convert.ParseXGFile(path)
 }
 
-func bmabDir(t *testing.T) string {
+func bmabDir(t testing.TB) string {
 	t.Helper()
 	dir := filepath.Join("data", "bmab-2025-06-23")
 	if _, err := os.Stat(dir); err != nil {

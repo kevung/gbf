@@ -1,7 +1,7 @@
 # Gammon Binary Format (GBF)
 
-Version: 1.0-draft
-Status: Draft Specification
+Version: 1.0
+Status: Final
 
 > This specification supersedes `legacy/SPEC.md` (v0.3). The legacy file is
 > retained for historical reference only.
@@ -67,9 +67,11 @@ Fixed size: **80 bytes** (66 payload + 14 padding).
 | 65     | 1    | BlockCount         | uint8, analysis blocks following  |
 | 66     | 14   | Padding            | Must be zero                      |
 
-> Status: The 80-byte layout is inherited from v0.3 and will be re-evaluated
-> after Phase 1 data exploration. Candidates for change: removing derived
-> fields (PipX/O, Zobrist) from the record, reducing padding.
+> **v1.0 decision** (confirmed after Phase 1 / M5 exploration): layout
+> unchanged from v0.3. PipX/PipO are kept in the record for round-trip
+> verification without a DB join. Zobrist is kept for portability. The
+> 14-byte padding is reserved for future extension blocks. No migration
+> required.
 
 ### 5.1 Checker Layer Bitboards
 
@@ -317,8 +319,8 @@ normalized before hashing.
 - **v0.3**: Match metadata (type=4) and game boundary (type=5) blocks.
   Structured match serialization preserving player names, match length,
   game scores, Crawford flag.
-- **v1.0-draft** (this document):
+- **v1.0** (this document — final):
   - Board-only Zobrist hash specification (section 7.2)
-  - Explicit "re-evaluate after Phase 1" note on base record layout
+  - 80-byte base record confirmed as final layout (no change from v0.3)
   - Separated from database/feature concerns (see ARCHITECTURE.md)
   - Aligned with multi-backend storage architecture

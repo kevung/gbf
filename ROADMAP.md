@@ -10,7 +10,8 @@
 | M3 Import BMAB | ✅ Complete | 5K files validated, 11K pos/s, 14µs lookup |
 | M4 Feature Extraction | ✅ Complete | 44-dim vector, .npy + CSV export, normalization |
 | M5 Visualization Exploration | ✅ Complete | UMAP/PCA/HDBSCAN on 1.57M pos, 6 clusters, synthesis report |
-| M6–M9 | ⬜ Not started | |
+| M9 Phase 2 Refinement        | ✅ Complete | 4 derived cols, backfill, indexes, query docs, SPEC v1.0 final |
+| M6–M8 | ⬜ Not started | |
 
 ## Overview
 
@@ -149,6 +150,21 @@ in the full implementation.
 **Task sheet**: [docs/tasks/M4-features.md](docs/tasks/M4-features.md)
 
 ---
+
+## M9 — Phase 2 Refinement ✅
+
+**Objective**: Finalize the schema, add derived columns, tune indexes,
+document queries, and finalize SPEC v1.0.
+
+**Sub-steps** (all complete):
+1. Schema: 4 derived columns (pos_class, pip_diff, prime_len_x/o) + 4 indexes
+2. UpsertPosition: auto-populates derived columns at insert time
+3. BackfillDerivedColumns: cursor-based migration for existing databases
+4. Query docs: `docs/queries.md` — 7 query categories, benchmarks included
+5. SPEC v1.0 finalized: 80-byte layout confirmed unchanged
+6. Benchmarks: Zobrist ~21 µs, class+away ~33 µs, pip_diff range ~35 µs
+
+**Task sheet**: [docs/tasks/M9-refinement.md](docs/tasks/M9-refinement.md)
 
 ## M5 — Visualization Exploration (Jupyter) ✅
 
