@@ -10,44 +10,64 @@ performance, and finalize the GBF v1.0 specification.
 
 M5 (exploration findings and synthesis report).
 
+## M5 Findings — Confirmed Recommendations
+
+From `notebooks/06_synthesis.md` (M5 validated results on 1.57M positions):
+
+**Columns to add** (all confirmed discriminant by PCA + HDBSCAN):
+
+| Column         | Justification                                              |
+|----------------|------------------------------------------------------------|
+| `pos_class`    | UMAP shows 3 well-separated regions; needed for all class-based queries |
+| `pip_diff`     | PC3 standalone (6% variance); range queries for race analysis |
+| `prime_len_x`  | PC2 contributor (made_x/prime_x); identifies prime-vs-prime positions |
+| `prime_len_o`  | Same, symmetric                                            |
+
+**Columns NOT adding** (M5 showed low discriminant value for SQL indexing):
+- `blot_count_x/o` — useful in features but rarely a filter criterion
+- `anchor_count_x/o` — PC5 contributor, niche query use case
+- `made_count_x/o` — covered by prime_len for structural queries
+
+**Index recommendations** (validated by M5 query patterns):
+```sql
+CREATE INDEX idx_positions_class      ON positions(pos_class);
+CREATE INDEX idx_positions_pip_diff   ON positions(pip_diff);
+CREATE INDEX idx_positions_class_away ON positions(pos_class, away_x, away_o);
+CREATE INDEX idx_moves_error          ON moves(equity_diff) WHERE equity_diff > 500;
+```
+
+**Difficulty finding** (M5.4): contact positions average 4.0 mp equity loss,
+10× higher than race (0.4 mp) and bearoff (0.1 mp). The `equity_diff > 500`
+partial index targets the meaningful error tail.
+
 ## Sub-steps
 
 ### M9.1 — Add Derived Columns
 
-Based on M5 findings, add columns to the positions table for the most
-discriminant features identified during exploration. Candidates:
+Add the 4 confirmed columns to the positions table:
 
 ```sql
-ALTER TABLE positions ADD COLUMN position_class INTEGER;  -- 0=contact, 1=race, 2=bearoff
-ALTER TABLE positions ADD COLUMN prime_length_x INTEGER;
-ALTER TABLE positions ADD COLUMN prime_length_o INTEGER;
-ALTER TABLE positions ADD COLUMN blot_count_x INTEGER;
-ALTER TABLE positions ADD COLUMN blot_count_o INTEGER;
-ALTER TABLE positions ADD COLUMN anchor_count_x INTEGER;
-ALTER TABLE positions ADD COLUMN anchor_count_o INTEGER;
-ALTER TABLE positions ADD COLUMN pip_diff INTEGER;
+ALTER TABLE positions ADD COLUMN pos_class   INTEGER;  -- 0=contact, 1=race, 2=bearoff
+ALTER TABLE positions ADD COLUMN pip_diff    INTEGER;  -- PipX - PipO (signed)
+ALTER TABLE positions ADD COLUMN prime_len_x INTEGER;  -- longest consecutive made-point run
+ALTER TABLE positions ADD COLUMN prime_len_o INTEGER;
 ```
 
-Backfill existing rows with a migration script:
+Backfill existing rows:
 ```go
 func BackfillDerivedColumns(store Store) error
 ```
 
-Only add columns that M5 showed are frequently used for filtering or
-that significantly improve query performance.
+Populate from `ExtractDerivedFeatures` (already implemented in `features.go`).
 
 ### M9.2 — Optimize Indexes
 
-Based on observed query patterns from M5/M6:
-- Add composite indexes for common filter combinations
-- Drop indexes that are never used (check pg_stat_user_indexes)
-- Consider partial indexes (e.g., only positions with equity_diff > 0)
+Apply the M5-recommended indexes above.
+- Drop `idx_positions_away` if superseded by `idx_positions_class_away`.
+- For PostgreSQL: use HASH index on `zobrist_hash` / `board_hash`.
+- Partial index on `moves(equity_diff)` covers the difficulty hotspot queries.
 
-Example candidates:
-```sql
-CREATE INDEX idx_positions_class_away ON positions(position_class, away_x, away_o);
-CREATE INDEX idx_moves_error ON moves(equity_diff) WHERE equity_diff > 500;
-```
+Validate with EXPLAIN QUERY PLAN before and after.
 
 ### M9.3 — BaseRecord Revision (v1.0)
 
