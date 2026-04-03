@@ -4,7 +4,7 @@
 
 | Milestone | Status | Notes |
 |-----------|--------|-------|
-| M0 Foundations | 🔄 In progress | M0.1–M0.6 done, M0.7 (experiments) pending |
+| M0 Foundations | ✅ Complete | All sub-steps + 4 validation experiments done |
 | M1–M9 | ⬜ Not started | |
 
 ## Overview
@@ -50,7 +50,7 @@ Each test has: name, description, inputs, expected output, success criterion.
 
 ---
 
-## M0 — Foundations + Validation
+## M0 — Foundations + Validation ✅
 
 **Objective**: Set up the repository structure, core interfaces, and run 4
 validation experiments to test fundamental assumptions before investing
@@ -58,18 +58,18 @@ in the full implementation.
 
 **Pre-requisites**: None.
 
-**Sub-steps**:
+**Sub-steps** (all complete):
 1. Restructure repository (packages, move legacy code)
 2. Define `Store` interface (minimal: Upsert, Query, Close)
 3. Implement SQL schema (DDL for 5 tables + indexes)
 4. Implement `SQLiteStore` (connect, create tables, close)
 5. Implement board-only Zobrist hash
 6. Port data structures from legacy
-7. **Validation experiments** (see task sheet for details):
-   - Exp 1: SQL schema vs target queries (can the 3 query types be expressed?)
-   - Exp 2: Double Zobrist relevance (how many board_hash have multiple zobrist_hash?)
-   - Exp 3: UMAP readability (does a 2D projection show visible clusters?)
-   - Exp 4: Performance at scale (extrapolate import/query times from 1000 files)
+7. Validation experiments — results (2026-04-03):
+   - Exp 1: all 3 target queries expressible, return non-empty results ✓
+   - Exp 2: 1.1% of board_hash have multiple zobrist_hash → index worth keeping ✓
+   - Exp 3: UMAP shows visible pip-diff gradient + contact/race cluster separation ✓
+   - Exp 4: ~6 900 pos/sec, 166K extrapolation ~2h27 (< 24h limit) ✓
 
 **Task sheet**: [docs/tasks/M0-foundations.md](docs/tasks/M0-foundations.md)
 

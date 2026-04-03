@@ -51,6 +51,11 @@ func (s *SQLiteStore) Close() error {
 	return s.db.Close()
 }
 
+// DB returns the underlying *sql.DB for raw queries.
+func (s *SQLiteStore) DB() *sql.DB {
+	return s.db
+}
+
 // UpsertPosition inserts a position or ignores if zobrist_hash already exists.
 // Returns the ID of the existing or newly inserted row.
 func (s *SQLiteStore) UpsertPosition(ctx context.Context, rec gbf.BaseRecord, boardHash uint64) (int64, error) {
