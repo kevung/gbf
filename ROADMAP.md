@@ -8,7 +8,8 @@
 | M1 Import XG   | ✅ Complete | Full pipeline: parse → convert → store |
 | M2 Import Multi-format | ✅ Complete | SGF/MAT/TXT + cross-format dedup |
 | M3 Import BMAB | ✅ Complete | 5K files validated, 11K pos/s, 14µs lookup |
-| M4–M9 | ⬜ Not started | |
+| M4 Feature Extraction | ✅ Complete | 44-dim vector, .npy + CSV export, normalization |
+| M5–M9 | ⬜ Not started | |
 
 ## Overview
 
@@ -131,18 +132,18 @@ in the full implementation.
 
 ---
 
-## M4 — Feature Extraction
+## M4 — Feature Extraction ✅
 
 **Objective**: Extract numeric feature vectors from positions for visualization.
 
 **Pre-requisites**: M3 (at least 1 region imported).
 
-**Sub-steps**:
-1. Define raw feature vector (point counts, bar, borne-off, pip, cube, away)
-2. Compute derived features (blot count, prime length, anchors, contact/race)
-3. Implement `ExtractFeatures(BaseRecord) -> []float64` in Go
-4. Feature normalization (scaling for UMAP/PCA)
-5. Export features to numpy via Parquet or .npy file
+**Sub-steps** (all complete):
+1. Raw vector (34): signed point counts, bar, borne-off, pip, cube, away
+2. Derived (10): blots, made points, prime length, anchors, pip_diff, position class
+3. `ExtractAllFeatures(BaseRecord) → []float64` (44 dims), `ClassifyPosition`
+4. Normalization: `ComputeNormParams`, `StandardScale`, `MinMaxScale`
+5. Export: `ExportFeaturesNpy` (.npy v1.0) + `ExportFeaturesCSV`
 
 **Task sheet**: [docs/tasks/M4-features.md](docs/tasks/M4-features.md)
 
