@@ -66,7 +66,7 @@ func (s *PGStore) Close() error {
 // Intended for test setup/teardown only.
 func (s *PGStore) TruncateAll(ctx context.Context) {
 	s.pool.Exec(ctx,
-		`TRUNCATE analyses, moves, games, matches, positions RESTART IDENTITY CASCADE`)
+		`TRUNCATE projections, projection_runs, analyses, moves, games, matches, positions RESTART IDENTITY CASCADE`)
 }
 
 // conn returns the active transaction if in a batch, otherwise the pool.
@@ -514,6 +514,202 @@ func splitStatements(ddl string) []string {
 		}
 	}
 	return out
+}
+
+// ── Projection methods (M8) ──────────────────────────────────────────────────
+
+// PositionByID returns a single position with analyses by its ID, or (nil, nil).
+func (s *PGStore) PositionByID(ctx context.Context, id int64) (*gbf.PositionWithAnalyses, error) {
+	rows, err := s.conn().Query(ctx,
+		`SELECT`+pgPositionCols+`FROM positions WHERE id = $1`, id)
+	if err != nil {
+		return nil, fmt.Errorf("position by id: %w", err)
+	}
+	defer rows.Close()
+
+	positions, err := pgScanPositions(rows)
+	if err != nil {
+		return nil, err
+	}
+	if len(positions) == 0 {
+		return nil, nil
+	}
+	pwa, err := s.attachAnalyses(ctx, positions)
+	if err != nil {
+		return nil, err
+	}
+	return &pwa[0], nil
+}
+
+// CreateProjectionRun inserts a projection run and returns its ID.
+func (s *PGStore) CreateProjectionRun(ctx context.Context, run gbf.ProjectionRun) (int64, error) {
+	var id int64
+	err := s.conn().QueryRow(ctx, `
+		INSERT INTO projection_runs (method, feature_version, params, n_points, is_active)
+		VALUES ($1, $2, $3, $4, FALSE)
+		RETURNING id`,
+		run.Method, run.FeatureVersion, run.Params, run.NPoints,
+	).Scan(&id)
+	if err != nil {
+		return 0, fmt.Errorf("create projection run: %w", err)
+	}
+	return id, nil
+}
+
+// ActivateProjectionRun activates the given run and deactivates others with the same method.
+func (s *PGStore) ActivateProjectionRun(ctx context.Context, runID int64) error {
+	var method string
+	err := s.conn().QueryRow(ctx,
+		`SELECT method FROM projection_runs WHERE id = $1`, runID,
+	).Scan(&method)
+	if err != nil {
+		return fmt.Errorf("lookup projection run: %w", err)
+	}
+	if _, err := s.conn().Exec(ctx,
+		`UPDATE projection_runs SET is_active = FALSE WHERE method = $1`, method,
+	); err != nil {
+		return fmt.Errorf("deactivate runs: %w", err)
+	}
+	if _, err := s.conn().Exec(ctx,
+		`UPDATE projection_runs SET is_active = TRUE WHERE id = $1`, runID,
+	); err != nil {
+		return fmt.Errorf("activate run: %w", err)
+	}
+	return nil
+}
+
+// InsertProjectionBatch inserts a batch of projection points.
+func (s *PGStore) InsertProjectionBatch(ctx context.Context, runID int64, pts []gbf.ProjectionPoint) error {
+	for _, pt := range pts {
+		_, err := s.conn().Exec(ctx, `
+			INSERT INTO projections (run_id, position_id, x, y, z, cluster_id)
+			VALUES ($1, $2, $3, $4, $5, $6)
+			ON CONFLICT (run_id, position_id) DO NOTHING`,
+			runID, pt.PositionID, pt.X, pt.Y, pt.Z, pt.ClusterID,
+		)
+		if err != nil {
+			return fmt.Errorf("insert projection point: %w", err)
+		}
+	}
+	return nil
+}
+
+// ActiveProjectionRun returns the active run for the given method, or (nil, nil).
+func (s *PGStore) ActiveProjectionRun(ctx context.Context, method string) (*gbf.ProjectionRun, error) {
+	var r gbf.ProjectionRun
+	err := s.conn().QueryRow(ctx, `
+		SELECT id, method, feature_version, COALESCE(params::TEXT,''), COALESCE(n_points,0),
+		       COALESCE(created_at::TEXT,''), is_active
+		FROM projection_runs
+		WHERE method = $1 AND is_active = TRUE`, method,
+	).Scan(&r.ID, &r.Method, &r.FeatureVersion, &r.Params, &r.NPoints, &r.CreatedAt, &r.IsActive)
+	if err != nil {
+		if err.Error() == "no rows in result set" {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("active projection run: %w", err)
+	}
+	return &r, nil
+}
+
+// QueryProjections returns projection points for the active run.
+func (s *PGStore) QueryProjections(ctx context.Context, method string, f gbf.ProjectionFilter) ([]gbf.ProjectionRow, error) {
+	run, err := s.ActiveProjectionRun(ctx, method)
+	if err != nil {
+		return nil, err
+	}
+	if run == nil {
+		return nil, nil
+	}
+
+	limit := f.Limit
+	if limit <= 0 {
+		limit = 10000
+	}
+
+	var conds []string
+	var args []any
+	args = append(args, run.ID)
+	conds = append(conds, fmt.Sprintf("pr.run_id = $%d", len(args)))
+
+	if f.ClusterID != nil {
+		args = append(args, *f.ClusterID)
+		conds = append(conds, fmt.Sprintf("pr.cluster_id = $%d", len(args)))
+	}
+	if f.AwayX != nil {
+		args = append(args, *f.AwayX)
+		conds = append(conds, fmt.Sprintf("p.away_x = $%d", len(args)))
+	}
+	if f.AwayO != nil {
+		args = append(args, *f.AwayO)
+		conds = append(conds, fmt.Sprintf("p.away_o = $%d", len(args)))
+	}
+	if f.PosClass != nil {
+		args = append(args, *f.PosClass)
+		conds = append(conds, fmt.Sprintf("COALESCE(p.pos_class,0) = $%d", len(args)))
+	}
+
+	args = append(args, limit, f.Offset)
+	q := fmt.Sprintf(`SELECT pr.position_id, pr.x, pr.y, pr.z, pr.cluster_id,
+	             COALESCE(p.away_x,0), COALESCE(p.away_o,0), COALESCE(p.pos_class,0)
+	      FROM projections pr
+	      JOIN positions p ON p.id = pr.position_id
+	      WHERE %s
+	      LIMIT $%d OFFSET $%d`,
+		strings.Join(conds, " AND "), len(args)-1, len(args))
+
+	rows, err := s.conn().Query(ctx, q, args...)
+	if err != nil {
+		return nil, fmt.Errorf("query projections: %w", err)
+	}
+	defer rows.Close()
+
+	var out []gbf.ProjectionRow
+	for rows.Next() {
+		var r gbf.ProjectionRow
+		var z *float32
+		var cid *int
+		if err := rows.Scan(&r.PositionID, &r.X, &r.Y, &z, &cid,
+			&r.AwayX, &r.AwayO, &r.PosClass); err != nil {
+			return nil, fmt.Errorf("scan projection: %w", err)
+		}
+		r.Z = z
+		r.ClusterID = cid
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// QueryClusterSummary returns per-cluster counts and centroids for the active run.
+func (s *PGStore) QueryClusterSummary(ctx context.Context, method string) ([]gbf.ClusterSummary, error) {
+	run, err := s.ActiveProjectionRun(ctx, method)
+	if err != nil {
+		return nil, err
+	}
+	if run == nil {
+		return nil, nil
+	}
+
+	rows, err := s.conn().Query(ctx, `
+		SELECT cluster_id, COUNT(*), AVG(x), AVG(y)
+		FROM projections
+		WHERE run_id = $1 AND cluster_id IS NOT NULL
+		GROUP BY cluster_id
+		ORDER BY cluster_id`, run.ID)
+	if err != nil {
+		return nil, fmt.Errorf("cluster summary: %w", err)
+	}
+	defer rows.Close()
+
+	var out []gbf.ClusterSummary
+	for rows.Next() {
+		var c gbf.ClusterSummary
+		if err := rows.Scan(&c.ClusterID, &c.Count, &c.CentroidX, &c.CentroidY); err != nil {
+			return nil, fmt.Errorf("scan cluster: %w", err)
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
 }
 
 // ── Querier adapters ──────────────────────────────────────────────────────────

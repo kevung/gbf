@@ -324,12 +324,47 @@ Export to numpy via Parquet or .npy file.
 - Interactive plots (plotly) for drill-down
 - Libraries: matplotlib, plotly, umap-learn, scikit-learn
 
-**SaaS (production)**:
-- Pre-computed projections stored in database or cache
-- Interactive scatter plot components (hover = position detail, click = drill-down)
-- Dynamic filtering (by score, cube, features) with re-projection on subsets
-- Player comparison (overlay "my games" vs "full dataset")
-- API endpoints: `/api/viz/umap`, `/api/viz/cluster`
+**SaaS (production, M8)**:
+- Pre-computed projections stored in database via versioned *projection runs*
+- API endpoints: `/api/viz/projection`, `/api/viz/clusters`, `/api/viz/position/:id`, `/api/viz/runs`
+- Dynamic filtering (by score, cube, position class, cluster) via query params
+- Decoupled from feature format: API serves (x, y, cluster_id) per run, never raw features
+
+### Projection Run Architecture
+
+The key decoupling mechanism: the API does not know about features. It serves
+pre-computed (x, y, cluster_id) coordinates associated with a **projection run**.
+
+```
+Features (Python, exploratory)     API (Go, stable)
+────────────────────────────       ────────────────
+features.npy → UMAP/HDBSCAN  →  projection_runs table  →  /api/viz/projection
+                                 projections table
+```
+
+**Schema**:
+```sql
+CREATE TABLE projection_runs (
+    id              BIGSERIAL PRIMARY KEY,
+    method          TEXT NOT NULL,          -- 'umap_2d', 'pca_2d'
+    feature_version TEXT NOT NULL,          -- 'v1.0', 'v2-no-pip'
+    params          JSONB/TEXT,             -- hyperparameters
+    n_points        INTEGER,
+    created_at      TIMESTAMP,
+    is_active       BOOLEAN DEFAULT FALSE   -- one active per method
+);
+
+CREATE TABLE projections (
+    run_id      → projection_runs(id),
+    position_id → positions(id),
+    x, y, z (REAL), cluster_id (INTEGER)
+);
+```
+
+**Lifecycle**: when features change (e.g., removing pip_diff from the vector),
+a new `projection_run` is created with a new `feature_version`. The old run
+stays in the database for comparison. Activating the new run is atomic
+(deactivate old → activate new).
 
 ### Target Use Cases
 

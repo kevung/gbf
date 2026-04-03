@@ -13,7 +13,7 @@
 | M9 Phase 2 Refinement        | ✅ Complete | 4 derived cols, backfill, indexes, query docs, SPEC v1.0 final |
 | M6 Query API                 | ✅ Complete | 5 Go query methods, Python helper, migration tool |
 | M7 PostgreSQL Backend        | ✅ Complete | PGStore + pgxpool, migration SQLite→PG, concurrency tests (race-clean) |
-| M8 Visualization SaaS        | ⬜ Not started | |
+| M8 Visualization SaaS        | ✅ Complete | Projection runs, viz API (4 endpoints), import-projections CLI |
 
 ## Overview
 
@@ -225,19 +225,21 @@ Validated on 1.57M positions: 17,904 DMP positions, correct class distribution.
 
 ---
 
-## M8 — Visualization SaaS
+## M8 — Visualization SaaS ✅
 
 **Objective**: Production visualization components for the SaaS platform.
 
 **Pre-requisites**: M5 (exploration findings), M7 (PostgreSQL backend).
 
 **Sub-steps**:
-1. API endpoint `/api/viz/umap` — pre-computed 2D projections
-2. API endpoint `/api/viz/cluster` — cluster membership and centroids
-3. Interactive scatter plot component (hover = position detail, click = drill-down)
-4. Dynamic filtering (by score, cube, features) with subset re-projection
-5. Player comparison (overlay "my games" vs "full dataset")
-6. Projection cache (materialized views or dedicated table)
+1. ✅ Projection run schema (projection_runs + projections tables, both SQLite and PG)
+2. ✅ Store interface: 6 projection methods (Create/Activate/Insert/Active/Query/ClusterSummary)
+3. ✅ `viz` package: HTTP API with 4 endpoints (projection, clusters, position detail, runs)
+4. ✅ `cmd/import-projections`: CSV → SQLite projection import CLI
+5. ✅ `python/compute_projections.py`: features.npy → UMAP/HDBSCAN → CSV pipeline
+6. ✅ Decoupled architecture: API serves (x, y, cluster_id) per versioned run, no feature knowledge
+7. ⬜ Frontend scatter plot component (deferred to SaaS project)
+8. ⬜ Player comparison endpoint (deferred — needs query-by-player in Store)
 
 **Task sheet**: [docs/tasks/M8-viz-saas.md](docs/tasks/M8-viz-saas.md)
 

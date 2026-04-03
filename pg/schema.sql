@@ -94,3 +94,28 @@ CREATE INDEX IF NOT EXISTS idx_matches_player2    ON matches(player2);
 CREATE INDEX IF NOT EXISTS idx_moves_game         ON moves(game_id, move_number);
 CREATE INDEX IF NOT EXISTS idx_moves_equity_diff  ON moves(equity_diff);
 CREATE INDEX IF NOT EXISTS idx_moves_error        ON moves(equity_diff) WHERE equity_diff > 500;
+
+-- M8: projection tables (decoupled from feature format via versioned runs)
+CREATE TABLE IF NOT EXISTS projection_runs (
+    id              BIGSERIAL PRIMARY KEY,
+    method          TEXT    NOT NULL,       -- 'umap_2d', 'pca_2d', 'umap_3d'
+    feature_version TEXT    NOT NULL,       -- e.g. 'v1.0', 'v2-no-pip'
+    params          JSONB,                  -- {n_neighbors, min_dist, ...}
+    n_points        INTEGER,
+    created_at      TIMESTAMP DEFAULT NOW(),
+    is_active       BOOLEAN DEFAULT FALSE   -- one active per method
+);
+
+CREATE TABLE IF NOT EXISTS projections (
+    id          BIGSERIAL PRIMARY KEY,
+    run_id      BIGINT  NOT NULL REFERENCES projection_runs(id),
+    position_id BIGINT  NOT NULL REFERENCES positions(id),
+    x           REAL    NOT NULL,
+    y           REAL    NOT NULL,
+    z           REAL,                       -- NULL for 2D projections
+    cluster_id  INTEGER                     -- from HDBSCAN / k-means
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_proj_run_pos  ON projections(run_id, position_id);
+CREATE        INDEX IF NOT EXISTS idx_proj_run      ON projections(run_id);
+CREATE        INDEX IF NOT EXISTS idx_proj_cluster  ON projections(run_id, cluster_id);

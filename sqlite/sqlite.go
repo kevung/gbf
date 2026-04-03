@@ -112,8 +112,8 @@ func (s *SQLiteStore) UpsertPosition(ctx context.Context, rec gbf.BaseRecord, bo
 
 	// Derived columns (M9): computed once at insert time.
 	derived := gbf.ExtractDerivedFeatures(rec)
-	posClass  := int(derived[9]) // pos_class
-	pipDiff   := int(derived[8]) // pip_diff
+	posClass := int(derived[9])  // pos_class
+	pipDiff := int(derived[8])   // pip_diff
 	primeLenX := int(derived[4]) // prime_len_x
 	primeLenO := int(derived[5]) // prime_len_o
 
@@ -489,4 +489,203 @@ func scanPositions(rows *sql.Rows) ([]gbf.Position, error) {
 		positions = append(positions, p)
 	}
 	return positions, rows.Err()
+}
+
+// ── Projection methods (M8) ──────────────────────────────────────────────────
+
+// PositionByID returns a single position with analyses by its ID, or (nil, nil).
+func (s *SQLiteStore) PositionByID(ctx context.Context, id int64) (*gbf.PositionWithAnalyses, error) {
+	rows, err := s.conn().QueryContext(ctx,
+		`SELECT`+positionCols+`FROM positions WHERE id = ?`, id)
+	if err != nil {
+		return nil, fmt.Errorf("position by id: %w", err)
+	}
+	defer rows.Close()
+
+	positions, err := scanPositions(rows)
+	if err != nil {
+		return nil, err
+	}
+	if len(positions) == 0 {
+		return nil, nil
+	}
+	pwa, err := s.attachAnalyses(ctx, positions)
+	if err != nil {
+		return nil, err
+	}
+	return &pwa[0], nil
+}
+
+// CreateProjectionRun inserts a projection run and returns its ID.
+func (s *SQLiteStore) CreateProjectionRun(ctx context.Context, run gbf.ProjectionRun) (int64, error) {
+	res, err := s.conn().ExecContext(ctx, `
+		INSERT INTO projection_runs (method, feature_version, params, n_points, is_active)
+		VALUES (?, ?, ?, ?, 0)`,
+		run.Method, run.FeatureVersion, run.Params, run.NPoints,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("create projection run: %w", err)
+	}
+	return res.LastInsertId()
+}
+
+// ActivateProjectionRun sets is_active=1 for the given run and deactivates
+// all other runs with the same method.
+func (s *SQLiteStore) ActivateProjectionRun(ctx context.Context, runID int64) error {
+	// Get method for this run.
+	var method string
+	err := s.conn().QueryRowContext(ctx,
+		`SELECT method FROM projection_runs WHERE id = ?`, runID,
+	).Scan(&method)
+	if err != nil {
+		return fmt.Errorf("lookup projection run: %w", err)
+	}
+	if _, err := s.conn().ExecContext(ctx,
+		`UPDATE projection_runs SET is_active = 0 WHERE method = ?`, method,
+	); err != nil {
+		return fmt.Errorf("deactivate runs: %w", err)
+	}
+	if _, err := s.conn().ExecContext(ctx,
+		`UPDATE projection_runs SET is_active = 1 WHERE id = ?`, runID,
+	); err != nil {
+		return fmt.Errorf("activate run: %w", err)
+	}
+	return nil
+}
+
+// InsertProjectionBatch inserts a batch of projection points.
+func (s *SQLiteStore) InsertProjectionBatch(ctx context.Context, runID int64, pts []gbf.ProjectionPoint) error {
+	for _, pt := range pts {
+		_, err := s.conn().ExecContext(ctx, `
+			INSERT OR IGNORE INTO projections (run_id, position_id, x, y, z, cluster_id)
+			VALUES (?, ?, ?, ?, ?, ?)`,
+			runID, pt.PositionID, pt.X, pt.Y, pt.Z, pt.ClusterID,
+		)
+		if err != nil {
+			return fmt.Errorf("insert projection point: %w", err)
+		}
+	}
+	return nil
+}
+
+// ActiveProjectionRun returns the active run for the given method, or (nil, nil).
+func (s *SQLiteStore) ActiveProjectionRun(ctx context.Context, method string) (*gbf.ProjectionRun, error) {
+	var r gbf.ProjectionRun
+	err := s.conn().QueryRowContext(ctx, `
+		SELECT id, method, feature_version, COALESCE(params,''), COALESCE(n_points,0),
+		       COALESCE(created_at,''), is_active
+		FROM projection_runs
+		WHERE method = ? AND is_active = 1`, method,
+	).Scan(&r.ID, &r.Method, &r.FeatureVersion, &r.Params, &r.NPoints, &r.CreatedAt, &r.IsActive)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("active projection run: %w", err)
+	}
+	return &r, nil
+}
+
+// QueryProjections returns projection points for the active run.
+func (s *SQLiteStore) QueryProjections(ctx context.Context, method string, f gbf.ProjectionFilter) ([]gbf.ProjectionRow, error) {
+	run, err := s.ActiveProjectionRun(ctx, method)
+	if err != nil {
+		return nil, err
+	}
+	if run == nil {
+		return nil, nil
+	}
+
+	limit := f.Limit
+	if limit <= 0 {
+		limit = 10000
+	}
+
+	var conds []string
+	var args []any
+	conds = append(conds, "pr.run_id = ?")
+	args = append(args, run.ID)
+
+	if f.ClusterID != nil {
+		conds = append(conds, "pr.cluster_id = ?")
+		args = append(args, *f.ClusterID)
+	}
+	if f.AwayX != nil {
+		conds = append(conds, "p.away_x = ?")
+		args = append(args, *f.AwayX)
+	}
+	if f.AwayO != nil {
+		conds = append(conds, "p.away_o = ?")
+		args = append(args, *f.AwayO)
+	}
+	if f.PosClass != nil {
+		conds = append(conds, "COALESCE(p.pos_class,0) = ?")
+		args = append(args, *f.PosClass)
+	}
+
+	q := `SELECT pr.position_id, pr.x, pr.y, pr.z, pr.cluster_id,
+	             COALESCE(p.away_x,0), COALESCE(p.away_o,0), COALESCE(p.pos_class,0)
+	      FROM projections pr
+	      JOIN positions p ON p.id = pr.position_id
+	      WHERE ` + strings.Join(conds, " AND ") +
+		fmt.Sprintf(` LIMIT %d OFFSET %d`, limit, f.Offset)
+
+	rows, err := s.conn().QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, fmt.Errorf("query projections: %w", err)
+	}
+	defer rows.Close()
+
+	var out []gbf.ProjectionRow
+	for rows.Next() {
+		var r gbf.ProjectionRow
+		var z sql.NullFloat64
+		var cid sql.NullInt64
+		if err := rows.Scan(&r.PositionID, &r.X, &r.Y, &z, &cid,
+			&r.AwayX, &r.AwayO, &r.PosClass); err != nil {
+			return nil, fmt.Errorf("scan projection: %w", err)
+		}
+		if z.Valid {
+			f32 := float32(z.Float64)
+			r.Z = &f32
+		}
+		if cid.Valid {
+			v := int(cid.Int64)
+			r.ClusterID = &v
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// QueryClusterSummary returns per-cluster counts and centroids for the active run.
+func (s *SQLiteStore) QueryClusterSummary(ctx context.Context, method string) ([]gbf.ClusterSummary, error) {
+	run, err := s.ActiveProjectionRun(ctx, method)
+	if err != nil {
+		return nil, err
+	}
+	if run == nil {
+		return nil, nil
+	}
+
+	rows, err := s.conn().QueryContext(ctx, `
+		SELECT cluster_id, COUNT(*), AVG(x), AVG(y)
+		FROM projections
+		WHERE run_id = ? AND cluster_id IS NOT NULL
+		GROUP BY cluster_id
+		ORDER BY cluster_id`, run.ID)
+	if err != nil {
+		return nil, fmt.Errorf("cluster summary: %w", err)
+	}
+	defer rows.Close()
+
+	var out []gbf.ClusterSummary
+	for rows.Next() {
+		var c gbf.ClusterSummary
+		if err := rows.Scan(&c.ClusterID, &c.Count, &c.CentroidX, &c.CentroidY); err != nil {
+			return nil, fmt.Errorf("scan cluster: %w", err)
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
 }

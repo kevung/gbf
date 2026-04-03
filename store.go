@@ -20,10 +20,10 @@ type Position struct {
 	BorneOffO   int
 	SideToMove  int
 	// M9 derived columns (0 if not yet backfilled).
-	PosClass   int
-	PipDiff    int
-	PrimeLenX  int
-	PrimeLenO  int
+	PosClass  int
+	PipDiff   int
+	PrimeLenX int
+	PrimeLenO int
 }
 
 // PositionWithAnalyses bundles a position with all its stored analysis blocks.
@@ -157,8 +157,85 @@ type Store interface {
 	// (0=contact, 1=race, 2=bearoff).
 	QueryPositionClassDistribution(ctx context.Context) (map[int]int, error)
 
+	// ── Projections (M8) ─────────────────────────────────────────────────
+
+	// CreateProjectionRun inserts a new projection run and returns its ID.
+	CreateProjectionRun(ctx context.Context, run ProjectionRun) (int64, error)
+
+	// ActivateProjectionRun sets is_active=true for the given run and
+	// deactivates all other runs with the same method.
+	ActivateProjectionRun(ctx context.Context, runID int64) error
+
+	// InsertProjectionBatch inserts a batch of projection points for a run.
+	InsertProjectionBatch(ctx context.Context, runID int64, pts []ProjectionPoint) error
+
+	// ActiveProjectionRun returns the currently active run for the given method,
+	// or (nil, nil) if none.
+	ActiveProjectionRun(ctx context.Context, method string) (*ProjectionRun, error)
+
+	// QueryProjections returns projection points for the active run of the
+	// given method, with optional filters.
+	QueryProjections(ctx context.Context, method string, f ProjectionFilter) ([]ProjectionRow, error)
+
+	// QueryClusterSummary returns per-cluster counts and centroids for the
+	// active run of the given method.
+	QueryClusterSummary(ctx context.Context, method string) ([]ClusterSummary, error)
+
 	// ── Lifecycle ────────────────────────────────────────────────────────
 
 	// Close releases the store's resources.
 	Close() error
+}
+
+// ── Projection types (M8) ────────────────────────────────────────────────────
+
+// ProjectionRun describes a versioned projection computation.
+type ProjectionRun struct {
+	ID             int64
+	Method         string // e.g. "umap_2d", "pca_2d"
+	FeatureVersion string // e.g. "v1.0"
+	Params         string // JSON string
+	NPoints        int
+	CreatedAt      string
+	IsActive       bool
+}
+
+// ProjectionPoint is a single point to insert (no ID, no run_id).
+type ProjectionPoint struct {
+	PositionID int64
+	X          float32
+	Y          float32
+	Z          *float32 // nil for 2D
+	ClusterID  *int
+}
+
+// ProjectionRow is a stored projection point returned by queries.
+type ProjectionRow struct {
+	PositionID int64    `json:"position_id"`
+	X          float32  `json:"x"`
+	Y          float32  `json:"y"`
+	Z          *float32 `json:"z,omitempty"`
+	ClusterID  *int     `json:"cluster_id,omitempty"`
+	// Joined position attributes (populated when filter is used).
+	AwayX    int `json:"away_x"`
+	AwayO    int `json:"away_o"`
+	PosClass int `json:"pos_class"`
+}
+
+// ProjectionFilter constrains QueryProjections results.
+type ProjectionFilter struct {
+	ClusterID *int
+	AwayX     *int
+	AwayO     *int
+	PosClass  *int
+	Limit     int // 0 = default (10000)
+	Offset    int
+}
+
+// ClusterSummary holds aggregate stats for one cluster in a projection run.
+type ClusterSummary struct {
+	ClusterID int     `json:"cluster_id"`
+	Count     int     `json:"count"`
+	CentroidX float64 `json:"centroid_x"`
+	CentroidY float64 `json:"centroid_y"`
 }

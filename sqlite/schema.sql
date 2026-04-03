@@ -95,3 +95,28 @@ CREATE INDEX IF NOT EXISTS idx_positions_class_away
 
 CREATE INDEX IF NOT EXISTS idx_moves_error
     ON moves(equity_diff) WHERE equity_diff > 500;
+
+-- M8: projection tables (decoupled from feature format via versioned runs)
+CREATE TABLE IF NOT EXISTS projection_runs (
+    id              INTEGER PRIMARY KEY,
+    method          TEXT    NOT NULL,       -- 'umap_2d', 'pca_2d', 'umap_3d'
+    feature_version TEXT    NOT NULL,       -- e.g. 'v1.0', 'v2-no-pip'
+    params          TEXT,                   -- JSON: {n_neighbors, min_dist, ...}
+    n_points        INTEGER,
+    created_at      TEXT DEFAULT (datetime('now')),
+    is_active       INTEGER DEFAULT 0       -- 1 = active, 0 = archived
+);
+
+CREATE TABLE IF NOT EXISTS projections (
+    id          INTEGER PRIMARY KEY,
+    run_id      INTEGER NOT NULL REFERENCES projection_runs(id),
+    position_id INTEGER NOT NULL REFERENCES positions(id),
+    x           REAL    NOT NULL,
+    y           REAL    NOT NULL,
+    z           REAL,                       -- NULL for 2D projections
+    cluster_id  INTEGER                     -- from HDBSCAN / k-means
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_proj_run_pos  ON projections(run_id, position_id);
+CREATE        INDEX IF NOT EXISTS idx_proj_run      ON projections(run_id);
+CREATE        INDEX IF NOT EXISTS idx_proj_cluster  ON projections(run_id, cluster_id);
