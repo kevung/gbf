@@ -33,8 +33,10 @@ func ComputeTSNE(points [][]float64, nComponents int, perplexity float64, maxIte
 
 	// Compute pairwise distances.
 	dist := make([][]float64, n)
-	for i := 0; i < n; i++ {
+	for i := range dist {
 		dist[i] = make([]float64, n)
+	}
+	for i := 0; i < n; i++ {
 		for j := i + 1; j < n; j++ {
 			var s float64
 			for k := 0; k < d; k++ {
@@ -98,9 +100,11 @@ func ComputeTSNE(points [][]float64, nComponents int, perplexity float64, maxIte
 
 		// Compute Q matrix (t-distribution).
 		qNum := make([][]float64, n)
+		for i := range qNum {
+			qNum[i] = make([]float64, n)
+		}
 		var qSum float64
 		for i := 0; i < n; i++ {
-			qNum[i] = make([]float64, n)
 			for j := i + 1; j < n; j++ {
 				var dSq float64
 				for c := 0; c < nComponents; c++ {

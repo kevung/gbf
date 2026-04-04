@@ -269,12 +269,39 @@ M10.1, M10.3, and M10.6 can proceed in parallel after M10.0.
 
 ## Benchmark Results
 
-_To be filled after M10.0 implementation._
+Environment: AMD Ryzen 7 PRO 6850U (16 threads), Go 1.25, synthetic 44D data.
+Note: t-SNE bug fixed (dist/qNum rows not pre-allocated → panic) as part of M10.0.
 
-| Algorithm | n | Before | After M10.1 | After M10.2 |
-|-----------|---|--------|-------------|-------------|
-| UMAP k-NN | 10K | — | — | — |
-| UMAP full | 10K | — | — | — |
-| HDBSCAN | 10K | — | — | — |
-| t-SNE | 5K | — | — | — |
-| Import | full | ~11K pos/s | — | — |
+### Baseline (before M10.1)
+
+| Algorithm | n=1K | n=5K | n=10K | n=50K | Scaling |
+|-----------|------|------|-------|-------|---------|
+| UMAP k-NN | 75ms | 823ms | 2.8s | 73.6s | O(n²) |
+| HDBSCAN | 56ms | 1.7s | 7.2s | **3m30s** | O(n²) |
+| t-SNE (200 iters) | 3.3s | 107s | — (cap) | — (cap) | O(n²) |
+| K-Means/2D | <1ms | — | 28ms | 217ms | O(n·k) |
+| PCA/44D | <1ms | — | 17ms | — | O(n·d²) |
+
+Key observations:
+- HDBSCAN at 50K: 210s → completely blocks interactive use
+- UMAP k-NN at 50K: 73.6s → 70% of total UMAP time
+- t-SNE hard-capped at 5K (107s at 5K already); not viable for LoD 1+
+- PCA and K-Means scale well; no optimization needed
+
+### After M10.1 (quick wins)
+
+_To be filled after M10.1 implementation._
+
+| Algorithm | n=10K | n=50K | Speedup |
+|-----------|-------|-------|---------|
+| UMAP k-NN | — | — | — |
+| HDBSCAN | — | — | — |
+
+### After M10.2 (VP-tree)
+
+_To be filled after M10.2 implementation._
+
+| Algorithm | n=10K | n=50K | n=100K | Speedup vs baseline |
+|-----------|-------|-------|--------|---------------------|
+| UMAP k-NN | — | — | — | — |
+| HDBSCAN | — | — | — | — |
