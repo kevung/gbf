@@ -219,7 +219,16 @@ Replace ECharts scatter plot with deck.gl TileLayer.
 **M10.5e** — Point click → position detail (existing endpoint)
 
 Files: new `explorer/src/components/TileMap.svelte`,
-`explorer/src/views/Projection.svelte`, `explorer/package.json`
+modified `explorer/src/views/Projection.svelte`, `explorer/package.json`, `explorer/src/lib/api.js`
+
+Implementation notes:
+- `@deck.gl/core` + `@deck.gl/layers` installed via npm
+- `TileMap.svelte` uses `OrthographicView` + `ScatterplotLayer`; coordinates are normalised [0,1]² mapped to a 512×512 world space
+- Tile cache (`Map<key, TilePoint[]>`) lives in the component; cleared on method/lod change
+- LoD/zoom: continuous deck.gl zoom mapped to integer tile zoom within LoD range via `deckZoomToTileZoom()`
+- Color-by: cluster (palette), pos_class (3-class palette), away_x/away_o (heatmap)
+- Click: `ScatterplotLayer` `onClick` → `onPointClick({ position_id })` → `fetchPosition()` → `PositionDetail`
+- `Projection.svelte` simplified: removed ECharts, projectionData, limit/cluster-filter controls; kept method, colorBy, LoD, class-filter
 
 ### M10.6 — Import Parallelization
 
@@ -264,7 +273,7 @@ M10.1, M10.3, and M10.6 can proceed in parallel after M10.0.
 - [x] Parallel UMAP SGD via edge-chunked goroutines + atomic CAS (M10.2d, race-clean)
 - [x] LoD 0 computes in < 30s on 1.57M position database
 - [x] Tile API serves pre-computed tiles with cache headers
-- [ ] deck.gl frontend renders tiles with zoom/pan
+- [x] deck.gl frontend renders tiles with zoom/pan
 - [ ] Import throughput > 20K pos/s
 - [x] All tests pass (`go test ./... -short -race`)
 

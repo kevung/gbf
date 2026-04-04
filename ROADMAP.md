@@ -291,7 +291,7 @@ fluid rendering.
    sampling, per-(method, lod) activation, bounds storage
 5. ✅ M10.4 — Tile system: slippy map convention, pre-computed gzipped JSON
    tiles, LoD→zoom mapping, tile API endpoints
-6. M10.5 — Frontend: deck.gl TileLayer replacing ECharts scatter plot
+6. ✅ M10.5 — Frontend: deck.gl TileLayer replacing ECharts scatter plot
 7. M10.6 — Import parallelization: fan-out parsing pipeline (target >20K pos/s)
 8. M10.7 — Integration testing + documentation updates
 

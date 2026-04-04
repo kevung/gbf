@@ -77,6 +77,24 @@ export function fetchPosition(id) {
   return get(`/api/viz/position/${id}`);
 }
 
+// ── Tiles (M10.4/M10.5) ──────────────────────────────────────────────────────
+
+export function fetchTileMeta(method = 'umap_2d', lod = 0) {
+  return get(`/api/viz/tilemeta/${method}/${lod}`);
+}
+
+/**
+ * Fetch a tile and decompress the gzipped JSON payload.
+ * Returns an array of {id, x, y, c, pc} objects, or [] for empty tiles.
+ */
+export async function fetchTile(method, lod, z, x, y) {
+  const res = await fetch(`${BASE}/api/viz/tile/${method}/${lod}/${z}/${x}/${y}`);
+  if (res.status === 204) return [];
+  if (!res.ok) throw new Error(`tile ${z}/${x}/${y}: ${res.status}`);
+  // Server sends Content-Encoding: gzip — the browser decompresses it.
+  return res.json();
+}
+
 // ── Import ───────────────────────────────────────────────────────────────────
 
 export function startImport(proportion = 0.01, batchSize = 100) {
