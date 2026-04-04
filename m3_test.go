@@ -134,6 +134,7 @@ func TestBatchErrorHandling(t *testing.T) {
 		ErrorLogPath: errLogPath,
 		FileParser:   parser,
 		EngineName:   "eXtreme Gammon",
+		Workers:      1, // deterministic: error injected on exactly the 3rd call
 	}
 	report, err := gbf.ImportDirectory(ctx, store, dir, opts)
 	if err != nil {
@@ -305,4 +306,80 @@ func TestImportReportAccuracy(t *testing.T) {
 
 	t.Logf("DB: matches=%d games=%d moves=%d positions=%d",
 		matchCount, gameCount, moveCount, posCount)
+}
+
+// ── M10.6 — Parallel import ───────────────────────────────────────────────────
+
+// [U] Parallel import produces the same totals as sequential (Workers=1).
+func TestParallelImportMatchesSequential(t *testing.T) {
+	dir := bmabDir(t)
+	ctx := context.Background()
+
+	runImport := func(workers int) gbf.DirectoryReport {
+		store := openSQLiteStore(t)
+		opts := gbf.ImportOpts{
+			BatchSize:  20,
+			Limit:      50,
+			FileParser: xgParser,
+			EngineName: "eXtreme Gammon",
+			Workers:    workers,
+		}
+		rep, err := gbf.ImportDirectory(ctx, store, dir, opts)
+		if err != nil {
+			t.Fatalf("ImportDirectory (workers=%d): %v", workers, err)
+		}
+		return rep
+	}
+
+	seq := runImport(1)
+	par := runImport(0) // default → runtime.NumCPU()
+
+	if par.FilesImported != seq.FilesImported {
+		t.Errorf("FilesImported: seq=%d par=%d", seq.FilesImported, par.FilesImported)
+	}
+	if par.FilesFailed != seq.FilesFailed {
+		t.Errorf("FilesFailed: seq=%d par=%d", seq.FilesFailed, par.FilesFailed)
+	}
+	if par.Matches != seq.Matches {
+		t.Errorf("Matches: seq=%d par=%d", seq.Matches, par.Matches)
+	}
+	if par.Positions != seq.Positions {
+		t.Errorf("Positions: seq=%d par=%d", seq.Positions, par.Positions)
+	}
+}
+
+// [U] Parallel import with journal — skipped files are handled correctly.
+func TestParallelImportJournal(t *testing.T) {
+	dir := bmabDir(t)
+	store := openSQLiteStore(t)
+	ctx := context.Background()
+
+	journalPath := filepath.Join(t.TempDir(), "journal.txt")
+
+	// First run (parallel): import 10 files.
+	opts := gbf.ImportOpts{
+		BatchSize:   5,
+		Limit:       10,
+		JournalPath: journalPath,
+		FileParser:  xgParser,
+		EngineName:  "eXtreme Gammon",
+		Workers:     4,
+	}
+	r1, err := gbf.ImportDirectory(ctx, store, dir, opts)
+	if err != nil {
+		t.Fatalf("first import: %v", err)
+	}
+
+	// Second run (parallel): same limit — all should be skipped.
+	r2, err := gbf.ImportDirectory(ctx, store, dir, opts)
+	if err != nil {
+		t.Fatalf("second import: %v", err)
+	}
+
+	if r2.FilesSkipped != r1.FilesImported {
+		t.Errorf("expected %d skipped, got %d", r1.FilesImported, r2.FilesSkipped)
+	}
+	if r2.FilesImported != 0 {
+		t.Errorf("expected 0 re-imported, got %d", r2.FilesImported)
+	}
 }

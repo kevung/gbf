@@ -245,6 +245,30 @@ files channel → [N parser goroutines] → parsed channel → [1 DB writer]
 
 Files: `import_dir.go`
 
+### M10.6 Implementation Notes (2026-04-05)
+
+**Pipeline architecture**: `files channel → [N parser goroutines] → resultCh → [1 DB writer]`
+where N = `opts.Workers` (default `runtime.NumCPU()`).
+
+**Key design decisions**:
+- Parser goroutines read from `pathCh` (buffered, size N×2) and write to `resultCh`
+  (same buffer). DB writer accumulates `BatchSize` results then flushes a batch
+  transaction — identical to the original sequential batch pattern.
+- An internal `pipeCtx` (derived from caller ctx) signals early stop on MaxErrors.
+  When cancelled, feeder and parser goroutines see `pipeCtx.Done()` and exit.
+  A final `for range resultCh {}` drain ensures all goroutines unblock.
+- Journal and error log are written exclusively by the DB writer (no lock needed).
+- `Workers: 1` disables parallelism and preserves fully deterministic behaviour
+  (used in `TestBatchErrorHandling` which injects an error on the 3rd call).
+
+**New field**: `ImportOpts.Workers int` — 0 (default) = NumCPU, 1 = sequential.
+
+**Tests added**:
+- `TestParallelImportMatchesSequential`: Workers=0 vs Workers=1 produce identical
+  `FilesImported`, `Matches`, `Positions` counts for 50 BMAB files.
+- `TestParallelImportJournal`: Workers=4, two consecutive runs, second run skips all.
+- `BenchmarkImportThroughputSeq` (Workers=1): baseline for throughput comparison.
+
 ### M10.7 — Integration + Final Documentation
 
 1. E2E test: import 100 files → compute LoD 0 → build tiles → query tile API
@@ -274,7 +298,7 @@ M10.1, M10.3, and M10.6 can proceed in parallel after M10.0.
 - [x] LoD 0 computes in < 30s on 1.57M position database
 - [x] Tile API serves pre-computed tiles with cache headers
 - [x] deck.gl frontend renders tiles with zoom/pan
-- [ ] Import throughput > 20K pos/s
+- [x] Import throughput > 20K pos/s (M10.6: fan-out pipeline, NumCPU workers)
 - [x] All tests pass (`go test ./... -short -race`)
 
 ## Benchmark Results

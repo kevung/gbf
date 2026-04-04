@@ -8,8 +8,10 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -50,6 +52,10 @@ type ImportOpts struct {
 	// ProgressFn is called after each file (or batch) with the current stats.
 	// It may be nil.
 	ProgressFn func(p ProgressEvent)
+
+	// Workers is the number of parallel parser goroutines (default: runtime.NumCPU()).
+	// Set to 1 to disable parallelism (sequential parse + DB writes in one goroutine).
+	Workers int
 }
 
 // ProgressEvent carries the current import state during a directory import.
@@ -67,7 +73,7 @@ type ProgressEvent struct {
 
 // DirectoryReport summarises a completed directory import.
 type DirectoryReport struct {
-	FilesTotal   int
+	FilesTotal    int
 	FilesImported int
 	FilesSkipped  int // already in journal
 	FilesFailed   int
@@ -91,6 +97,10 @@ type Batcher interface {
 
 // ImportDirectory walks dir recursively, collecting files with supported
 // extensions, and imports them using opts.FileParser.
+//
+// Parsing is parallelised across opts.Workers goroutines (default: NumCPU).
+// A single DB-writer goroutine handles all store operations and journal/error
+// log writes to preserve serial ordering and avoid locking.
 func ImportDirectory(ctx context.Context, store Store, dir string, opts ImportOpts) (DirectoryReport, error) {
 	if opts.BatchSize <= 0 {
 		opts.BatchSize = 100
@@ -100,6 +110,10 @@ func ImportDirectory(ctx context.Context, store Store, dir string, opts ImportOp
 	}
 	if opts.EngineName == "" {
 		opts.EngineName = "unknown"
+	}
+	workers := opts.Workers
+	if workers <= 0 {
+		workers = runtime.NumCPU()
 	}
 
 	files, err := collectFiles(dir)
@@ -148,7 +162,7 @@ func ImportDirectory(ctx context.Context, store Store, dir string, opts ImportOp
 		Logger:     opts.Logger,
 	}
 
-	// Collect files not in journal.
+	// Filter out already-imported files.
 	var toImport []string
 	for _, f := range files {
 		if journal[f] {
@@ -158,37 +172,95 @@ func ImportDirectory(ctx context.Context, store Store, dir string, opts ImportOp
 		toImport = append(toImport, f)
 	}
 
-	// Process in batches.
-	for batchStart := 0; batchStart < len(toImport); batchStart += opts.BatchSize {
-		if ctx.Err() != nil {
-			break
-		}
+	// Internal context for pipeline cancellation (early stop on MaxErrors).
+	pipeCtx, pipeCancel := context.WithCancel(ctx)
+	defer pipeCancel()
 
-		end := batchStart + opts.BatchSize
-		if end > len(toImport) {
-			end = len(toImport)
+	type parseResult struct {
+		path  string
+		match *Match
+		err   error
+	}
+
+	pathCh := make(chan string, workers*2)
+	resultCh := make(chan parseResult, workers*2)
+
+	// Feeder: push file paths into pathCh.
+	go func() {
+		defer close(pathCh)
+		for _, path := range toImport {
+			select {
+			case <-pipeCtx.Done():
+				return
+			case pathCh <- path:
+			}
 		}
-		batch := toImport[batchStart:end]
+	}()
+
+	// Parser workers: parse files concurrently.
+	var wg sync.WaitGroup
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for path := range pathCh {
+				m, parseErr := opts.FileParser(path)
+				select {
+				case <-pipeCtx.Done():
+					return
+				case resultCh <- parseResult{path: path, match: m, err: parseErr}:
+				}
+			}
+		}()
+	}
+
+	// Close resultCh once all parsers have exited.
+	go func() {
+		wg.Wait()
+		close(resultCh)
+	}()
+
+	// DB writer: accumulate parsed results into batches and commit.
+	var pending []parseResult
+
+	flushBatch := func() bool {
+		if len(pending) == 0 {
+			return true
+		}
+		items := pending
+		pending = pending[:0]
 
 		if hasBatcher {
 			if err := batcher.BeginBatch(ctx); err != nil {
 				logf(opts.Logger, "begin batch: %v — skipping batch", err)
-				report.FilesFailed += len(batch)
-				continue
+				report.FilesFailed += len(items)
+				return true
 			}
 		}
 
 		batchOK := true
-		for _, path := range batch {
-			if ctx.Err() != nil {
-				batchOK = false
-				break
+		for _, item := range items {
+			if item.err != nil {
+				report.FilesFailed++
+				msg := fmt.Sprintf("%s: %v", filepath.Base(item.path), item.err)
+				report.Errors = append(report.Errors, msg)
+				logf(opts.Logger, "error: %s", msg)
+				if errLogW != nil {
+					fmt.Fprintln(errLogW, msg)
+				}
+				if opts.MaxErrors > 0 && report.FilesFailed >= opts.MaxErrors {
+					batchOK = false
+					break
+				}
+				continue
 			}
 
-			res, err := importOnefile(ctx, imp, path, opts.FileParser)
-			if err != nil {
+			matchHash := ComputeMatchHash(item.match)
+			canonHash := ComputeCanonicalMatchHash(item.match)
+			res, importErr := imp.ImportMatch(ctx, item.match, matchHash, canonHash)
+			if importErr != nil {
 				report.FilesFailed++
-				msg := fmt.Sprintf("%s: %v", filepath.Base(path), err)
+				msg := fmt.Sprintf("%s: %v", filepath.Base(item.path), importErr)
 				report.Errors = append(report.Errors, msg)
 				logf(opts.Logger, "error: %s", msg)
 				if errLogW != nil {
@@ -208,7 +280,7 @@ func ImportDirectory(ctx context.Context, store Store, dir string, opts ImportOp
 			report.Positions += res.Positions
 
 			if journalW != nil {
-				fmt.Fprintln(journalW, path)
+				fmt.Fprintln(journalW, item.path)
 			}
 		}
 
@@ -264,8 +336,30 @@ func ImportDirectory(ctx context.Context, store Store, dir string, opts ImportOp
 
 		if opts.MaxErrors > 0 && report.FilesFailed >= opts.MaxErrors {
 			logf(opts.Logger, "max errors (%d) reached — stopping", opts.MaxErrors)
+			pipeCancel()
+			return false
+		}
+		return true
+	}
+
+	for result := range resultCh {
+		if ctx.Err() != nil {
+			pipeCancel()
 			break
 		}
+		pending = append(pending, result)
+		if len(pending) >= opts.BatchSize {
+			if !flushBatch() {
+				break
+			}
+		}
+	}
+
+	// Flush any remaining items.
+	flushBatch()
+
+	// Drain resultCh so that blocked parser goroutines can exit cleanly.
+	for range resultCh {
 	}
 
 	report.Elapsed = time.Since(start)
@@ -274,16 +368,6 @@ func ImportDirectory(ctx context.Context, store Store, dir string, opts ImportOp
 	}
 
 	return report, nil
-}
-
-func importOnefile(ctx context.Context, imp *Importer, path string, parser func(string) (*Match, error)) (ImportResult, error) {
-	match, err := parser(path)
-	if err != nil {
-		return ImportResult{}, err
-	}
-	matchHash := ComputeMatchHash(match)
-	canonHash := ComputeCanonicalMatchHash(match)
-	return imp.ImportMatch(ctx, match, matchHash, canonHash)
 }
 
 // collectFiles walks dir and returns all files with supported extensions,

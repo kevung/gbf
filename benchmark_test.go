@@ -112,7 +112,8 @@ func BenchmarkPipDiffRangeQuery(b *testing.B) {
 	}
 }
 
-// BenchmarkImportThroughput measures import speed (positions per second).
+// BenchmarkImportThroughput measures import speed (positions per second)
+// using the default parallel pipeline (Workers = runtime.NumCPU()).
 func BenchmarkImportThroughput(b *testing.B) {
 	dir := bmabDir(b)
 
@@ -137,5 +138,35 @@ func BenchmarkImportThroughput(b *testing.B) {
 		elapsed := time.Since(start)
 
 		b.ReportMetric(float64(report.Positions)/elapsed.Seconds(), "pos/s")
+	}
+}
+
+// BenchmarkImportThroughputSeq measures import speed with Workers=1 (sequential)
+// as a baseline to compare against the parallel pipeline.
+func BenchmarkImportThroughputSeq(b *testing.B) {
+	dir := bmabDir(b)
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		b.StopTimer()
+		store := openSQLiteStore(b)
+		ctx := context.Background()
+		opts := gbf.ImportOpts{
+			BatchSize:  100,
+			Limit:      100,
+			FileParser: xgParser,
+			EngineName: "eXtreme Gammon",
+			Workers:    1,
 		}
+		b.StartTimer()
+
+		start := time.Now()
+		report, err := gbf.ImportDirectory(ctx, store, dir, opts)
+		if err != nil {
+			b.Fatalf("import: %v", err)
+		}
+		elapsed := time.Since(start)
+
+		b.ReportMetric(float64(report.Positions)/elapsed.Seconds(), "pos/s")
+	}
 }
