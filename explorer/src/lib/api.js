@@ -121,6 +121,8 @@ export function startProjectionCompute(params = {}) {
     hdbscan_min_size: params.hdbscanMinSize || 100,
     hdbscan_min_sample: params.hdbscanMinSample || 50,
     feature_indices: params.featureIndices || null,
+    n_neighbors: params.nNeighbors || 15,
+    umap_min_dist: params.umapMinDist || 0.1,
   });
 }
 

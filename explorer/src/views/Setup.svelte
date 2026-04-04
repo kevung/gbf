@@ -41,6 +41,8 @@
   let projTSNEIter = $state(1000);
   let projHDBSCANMinSize = $state(100);
   let projHDBSCANMinSample = $state(50);
+  let projNNeighbors = $state(15);
+  let projUMAPMinDist = $state(0.1);
   let projComputing = $state(false);
   let projEvents = $state([]);
   let projError = $state(null);
@@ -246,6 +248,8 @@
       tsneIter: projTSNEIter,
       hdbscanMinSize: projHDBSCANMinSize,
       hdbscanMinSample: projHDBSCANMinSample,
+      nNeighbors: projNNeighbors,
+      umapMinDist: projUMAPMinDist,
       featureIndices: featureIndices,
     })
       .then(() => {
@@ -400,7 +404,7 @@
 <div class="card">
   <h2>4 · Compute Projections</h2>
   <p style="color:var(--text-muted);margin-bottom:12px">
-    Dimensionality reduction + clustering. PCA runs in-process (fast). t-SNE is slower but gives better visual separation. Requires step 3.
+    Dimensionality reduction + clustering. PCA is fast. UMAP gives the best cluster separation. t-SNE is capped at 5K points. Requires step 3.
   </p>
 
   <!-- Method & Clustering selection -->
@@ -408,8 +412,9 @@
     <label>
       Reduction
       <select bind:value={projMethod} disabled={!config?.has_db || projComputing}>
+        <option value="umap_2d">UMAP 2D</option>
         <option value="pca_2d">PCA 2D</option>
-        <option value="tsne_2d">t-SNE 2D</option>
+        <option value="tsne_2d">t-SNE 2D (max 5K pts)</option>
       </select>
     </label>
     <label>
@@ -427,6 +432,16 @@
 
   <!-- Method-specific params -->
   <div class="controls" style="margin-top:8px">
+    {#if projMethod === 'umap_2d'}
+      <label>
+        n_neighbors
+        <input type="number" bind:value={projNNeighbors} min="2" max="200" style="width:70px" disabled={!config?.has_db || projComputing} />
+      </label>
+      <label>
+        min_dist
+        <input type="number" bind:value={projUMAPMinDist} min="0.0" max="1.0" step="0.05" style="width:70px" disabled={!config?.has_db || projComputing} />
+      </label>
+    {/if}
     {#if projMethod === 'tsne_2d'}
       <label>
         Perplexity
