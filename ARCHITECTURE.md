@@ -366,6 +366,40 @@ a new `projection_run` is created with a new `feature_version`. The old run
 stays in the database for comparison. Activating the new run is atomic
 (deactivate old → activate new).
 
+### Algorithm Optimization (M10)
+
+Pure Go implementations optimized for scalability:
+
+| Algorithm | Before | After (M10) |
+|-----------|--------|-------------|
+| UMAP k-NN | O(n²) brute force | O(n·log n) VP-tree |
+| UMAP SGD | Single-threaded `math.Pow` | Parallel, fast exp approximation |
+| HDBSCAN core dist | O(n²) sequential + fake quickselect | VP-tree + parallel + real quickselect |
+| t-SNE | O(n²) with per-iter alloc | Pre-allocated matrices |
+
+### Level of Detail (LoD) System (M10)
+
+3 fixed levels for progressive visualization:
+
+| LoD | Sample | Compute | Zoom levels |
+|-----|--------|---------|-------------|
+| 0   | ~5-10K (stratified by pos_class) | < 30s | 0-2 |
+| 1   | ~50-100K | 2-10 min | 3-5 |
+| 2   | Complete | Background | 6+ |
+
+Each LoD is a separate `projection_run` with `lod` column. Multiple runs
+active simultaneously (one per method × lod). Stratified sampling preserves
+contact/race/bearoff distribution.
+
+### Tile System (M10)
+
+Pre-computed tiles following slippy map convention:
+- Projection space normalized to [0,1]²
+- Zoom z → 2^z × 2^z tiles
+- Tiles stored as gzipped JSON in `projection_tiles` table
+- API: `GET /api/viz/tile/{method}/{lod}/{z}/{x}/{y}`
+- Frontend: deck.gl TileLayer with viewport-based loading
+
 ### Target Use Cases
 
 1. **Position family clusters**: race, back game, priming game, blitz, bearing off
@@ -385,11 +419,13 @@ stays in the database for comparison. Activating the new run is atomic
 
 In PostgreSQL: parallel imports enabled by MVCC.
 
-## Open Questions (to resolve during Phase 1)
+## Resolved Questions (from Phase 1)
 
-- Which structural features are most discriminant for queries?
-- Should derived columns (contact/race, prime length) be in the schema or computed on the fly?
-- Is the 80-byte BaseRecord optimal or should it be revised for v1.0?
-- Should there be a binary exchange format (GBF export from SQLite) or is SQLite the exchange format?
-- UMAP hyperparameters: what n_neighbors/min_dist work best for backgammon positions?
-- How many UMAP clusters emerge? Are they meaningful?
+All open questions resolved by M5 exploration and M9 refinement:
+
+- **Discriminant features**: pos_class, pip_diff, prime_len_x/o (M5 PCA/HDBSCAN)
+- **Derived columns**: Added to schema (M9); auto-populated at insert time
+- **BaseRecord**: 80 bytes confirmed unchanged for v1.0; PipX/O kept for portability
+- **Exchange format**: SQLite is the exchange format (single-file, cross-platform)
+- **UMAP hyperparams**: n_neighbors=15, min_dist=0.1 (M5 notebook 01)
+- **UMAP clusters**: 6 clusters via HDBSCAN, 3.4% noise; meaningful (contact/race/bearoff subdivisions)

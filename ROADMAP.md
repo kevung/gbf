@@ -14,6 +14,7 @@
 | M6 Query API                 | ✅ Complete | 5 Go query methods, Python helper, migration tool |
 | M7 PostgreSQL Backend        | ✅ Complete | PGStore + pgxpool, migration SQLite→PG, concurrency tests (race-clean) |
 | M8 Visualization SaaS        | ✅ Complete | Projection runs, viz API (4 endpoints), import-projections CLI |
+| M10 Performance + LoD + Tiles | 🔲 Planned  | Algo optimization, 3-level LoD, tile-based explorer, import parallel |
 
 ## Overview
 
@@ -45,6 +46,8 @@ M0 Foundations + Validation
 |       +-- M7 PostgreSQL Backend
 |           |
 |           +-- M8 Visualization SaaS
+|                   |
+|                   +-- M10 Performance + LoD + Tiles (needs M8+M9)
 ```
 
 ## Test Conventions
@@ -259,3 +262,44 @@ Validated on 1.57M positions: 17,904 DMP positions, correct class distribution.
 5. Performance benchmarks (import throughput, query latency)
 
 **Task sheet**: [docs/tasks/M9-refinement.md](docs/tasks/M9-refinement.md)
+
+---
+
+## M10 — Performance + LoD + Tiles 🔲
+
+**Objective**: Optimize projection algorithms for scalability, introduce a
+3-level LoD system for progressive visualization, and implement tile-based
+rendering in the web explorer. Enable interactive exploration of the full
+BMAB dataset (~110M positions).
+
+**Pre-requisites**: M8, M9.
+
+**Context**: Performance audit (2026-04-04) found O(n²) bottlenecks in UMAP
+k-NN (brute force), HDBSCAN (fake quickselect, sequential core distances),
+and t-SNE (per-iteration allocation). These prevent scaling beyond ~100K
+points interactively. Strategy: pure Go optimization (VP-tree, heap k-NN,
+parallel SGD) + LoD for progressive computation + pre-computed tiles for
+fluid rendering.
+
+**Sub-steps**:
+1. M10.0 — Benchmark baseline (projection algorithms at various n)
+2. M10.1 — Quick wins: heap k-NN, fast pow, cached findAB, real quickselect,
+   pre-alloc qNum, parallel HDBSCAN core distances
+3. M10.2 — VP-tree for k-NN O(n·log n) + parallel UMAP SGD
+4. M10.3 — LoD system: 3 levels (5-10K / 50-100K / complete), stratified
+   sampling, per-(method, lod) activation, bounds storage
+5. M10.4 — Tile system: slippy map convention, pre-computed gzipped JSON
+   tiles, LoD→zoom mapping, tile API endpoints
+6. M10.5 — Frontend: deck.gl TileLayer replacing ECharts scatter plot
+7. M10.6 — Import parallelization: fan-out parsing pipeline (target >20K pos/s)
+8. M10.7 — Integration testing + documentation updates
+
+**Dependency graph**:
+```
+M10.0 → M10.1 → M10.2
+M10.0 → M10.3 → M10.4 → M10.5
+M10.0 → M10.6
+All → M10.7
+```
+
+**Task sheet**: [docs/tasks/M10-perf-lod.md](docs/tasks/M10-perf-lod.md)

@@ -1,7 +1,7 @@
 # Gammon Binary Format (GBF)
 
 Version: 1.0
-Status: Final
+Status: Final (stable — no changes planned for M10)
 
 > This specification supersedes `legacy/SPEC.md` (v0.3). The legacy file is
 > retained for historical reference only.
