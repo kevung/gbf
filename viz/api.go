@@ -45,10 +45,11 @@ func (s *Server) handleProjection(w http.ResponseWriter, r *http.Request) {
 	if method == "" {
 		method = "umap_2d"
 	}
+	lod := intQueryParamDefault(r, "lod", 0)
 
 	ctx := r.Context()
 
-	run, err := s.store.ActiveProjectionRun(ctx, method)
+	run, err := s.store.ActiveProjectionRun(ctx, method, lod)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -67,7 +68,7 @@ func (s *Server) handleProjection(w http.ResponseWriter, r *http.Request) {
 		Offset:    intQueryParamDefault(r, "offset", 0),
 	}
 
-	points, err := s.store.QueryProjections(ctx, method, f)
+	points, err := s.store.QueryProjections(ctx, method, lod, f)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -76,7 +77,7 @@ func (s *Server) handleProjection(w http.ResponseWriter, r *http.Request) {
 		points = []gbf.ProjectionRow{}
 	}
 
-	clusters, _ := s.store.QueryClusterSummary(ctx, method)
+	clusters, _ := s.store.QueryClusterSummary(ctx, method, lod)
 	if clusters == nil {
 		clusters = []gbf.ClusterSummary{}
 	}
@@ -96,8 +97,9 @@ func (s *Server) handleClusters(w http.ResponseWriter, r *http.Request) {
 	if method == "" {
 		method = "umap_2d"
 	}
+	lod := intQueryParamDefault(r, "lod", 0)
 
-	clusters, err := s.store.QueryClusterSummary(r.Context(), method)
+	clusters, err := s.store.QueryClusterSummary(r.Context(), method, lod)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -399,16 +401,31 @@ func BaseRecordToBoard(rec *gbf.BaseRecord) [24]int {
 // ── GET /api/viz/runs ────────────────────────────────────────────────────────
 
 func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request) {
-	// List active runs for known methods.
-	methods := []string{"umap_2d", "pca_2d", "umap_3d"}
+	// Return all active runs across all (method, lod) combinations.
+	type lister interface {
+		ListActiveProjectionRuns(ctx context.Context) ([]gbf.ProjectionRun, error)
+	}
 	var runs []gbf.ProjectionRun
-	for _, m := range methods {
-		run, err := s.store.ActiveProjectionRun(r.Context(), m)
+	if l, ok := s.store.(lister); ok {
+		var err error
+		runs, err = l.ListActiveProjectionRuns(r.Context())
 		if err != nil {
-			continue
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
 		}
-		if run != nil {
-			runs = append(runs, *run)
+	} else {
+		// Fallback for stores without ListActiveProjectionRuns.
+		methods := []string{"umap_2d", "pca_2d", "umap_3d"}
+		for _, m := range methods {
+			for lod := 0; lod <= 2; lod++ {
+				run, err := s.store.ActiveProjectionRun(r.Context(), m, lod)
+				if err != nil {
+					continue
+				}
+				if run != nil {
+					runs = append(runs, *run)
+				}
+			}
 		}
 	}
 	if runs == nil {

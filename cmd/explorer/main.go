@@ -480,9 +480,11 @@ func (s *server) handleStats(w http.ResponseWriter, r *http.Request) {
 
 	methods := []string{"umap_2d", "pca_2d", "tsne_2d", "umap_3d"}
 	for _, m := range methods {
-		run, err := store.ActiveProjectionRun(ctx, m)
-		if err == nil && run != nil {
-			resp.Runs = append(resp.Runs, *run)
+		for lod := 0; lod <= 2; lod++ {
+			run, err := store.ActiveProjectionRun(ctx, m, lod)
+			if err == nil && run != nil {
+				resp.Runs = append(resp.Runs, *run)
+			}
 		}
 	}
 	if resp.Runs == nil {

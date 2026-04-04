@@ -173,23 +173,27 @@ type Store interface {
 	CreateProjectionRun(ctx context.Context, run ProjectionRun) (int64, error)
 
 	// ActivateProjectionRun sets is_active=true for the given run and
-	// deactivates all other runs with the same method.
+	// deactivates all other runs with the same method AND lod.
 	ActivateProjectionRun(ctx context.Context, runID int64) error
 
 	// InsertProjectionBatch inserts a batch of projection points for a run.
 	InsertProjectionBatch(ctx context.Context, runID int64, pts []ProjectionPoint) error
 
-	// ActiveProjectionRun returns the currently active run for the given method,
-	// or (nil, nil) if none.
-	ActiveProjectionRun(ctx context.Context, method string) (*ProjectionRun, error)
+	// ActiveProjectionRun returns the currently active run for the given
+	// (method, lod) pair, or (nil, nil) if none.
+	ActiveProjectionRun(ctx context.Context, method string, lod int) (*ProjectionRun, error)
+
+	// ListActiveProjectionRuns returns all active runs across all methods and
+	// LoD levels, ordered by method, lod.
+	ListActiveProjectionRuns(ctx context.Context) ([]ProjectionRun, error)
 
 	// QueryProjections returns projection points for the active run of the
-	// given method, with optional filters.
-	QueryProjections(ctx context.Context, method string, f ProjectionFilter) ([]ProjectionRow, error)
+	// given method and lod, with optional filters.
+	QueryProjections(ctx context.Context, method string, lod int, f ProjectionFilter) ([]ProjectionRow, error)
 
 	// QueryClusterSummary returns per-cluster counts and centroids for the
-	// active run of the given method.
-	QueryClusterSummary(ctx context.Context, method string) ([]ClusterSummary, error)
+	// active run of the given method and lod.
+	QueryClusterSummary(ctx context.Context, method string, lod int) ([]ClusterSummary, error)
 
 	// ── Lifecycle ────────────────────────────────────────────────────────
 
@@ -208,6 +212,9 @@ type ProjectionRun struct {
 	NPoints        int
 	CreatedAt      string
 	IsActive       bool
+	// M10.3: LoD level (0=5-10K overview, 1=50-100K medium, 2=complete).
+	LoD        int    `json:"lod"`
+	BoundsJSON string `json:"bounds_json,omitempty"` // {"min_x":…,"max_x":…,"min_y":…,"max_y":…}
 }
 
 // ProjectionPoint is a single point to insert (no ID, no run_id).

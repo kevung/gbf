@@ -103,8 +103,15 @@ CREATE TABLE IF NOT EXISTS projection_runs (
     params          JSONB,                  -- {n_neighbors, min_dist, ...}
     n_points        INTEGER,
     created_at      TIMESTAMP DEFAULT NOW(),
-    is_active       BOOLEAN DEFAULT FALSE   -- one active per method
+    is_active       BOOLEAN DEFAULT FALSE,  -- one active per (method, lod)
+    -- M10.3: LoD level (0=overview ~5-10K, 1=medium ~50-100K, 2=complete)
+    lod             INTEGER DEFAULT 0,
+    bounds_json     TEXT                    -- {"min_x":…,"max_x":…,"min_y":…,"max_y":…}
 );
+
+-- M10.3: migration for existing databases.
+ALTER TABLE projection_runs ADD COLUMN IF NOT EXISTS lod INTEGER DEFAULT 0;
+ALTER TABLE projection_runs ADD COLUMN IF NOT EXISTS bounds_json TEXT;
 
 CREATE TABLE IF NOT EXISTS projections (
     id          BIGSERIAL PRIMARY KEY,

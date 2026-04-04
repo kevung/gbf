@@ -55,7 +55,7 @@ t.Fatalf("InsertProjectionBatch: %v", err)
 }
 
 // Query back.
-rows, err := store.QueryProjections(ctx, "umap_2d", gbf.ProjectionFilter{})
+rows, err := store.QueryProjections(ctx, "umap_2d", 0, gbf.ProjectionFilter{})
 if err != nil {
 t.Fatalf("QueryProjections: %v", err)
 }
@@ -78,7 +78,7 @@ func TestActiveProjectionRun_NoRun(t *testing.T) {
 store := openSQLiteStore(t)
 ctx := context.Background()
 
-run, err := store.ActiveProjectionRun(ctx, "umap_2d")
+run, err := store.ActiveProjectionRun(ctx, "umap_2d", 0)
 if err != nil {
 t.Fatalf("ActiveProjectionRun: %v", err)
 }
@@ -113,7 +113,7 @@ t.Fatalf("ActivateProjectionRun 2: %v", err)
 }
 
 // Only run2 should be active.
-active, err := store.ActiveProjectionRun(ctx, "umap_2d")
+active, err := store.ActiveProjectionRun(ctx, "umap_2d", 0)
 if err != nil {
 t.Fatalf("ActiveProjectionRun: %v", err)
 }
@@ -158,7 +158,7 @@ pts := []gbf.ProjectionPoint{
 }
 store.InsertProjectionBatch(ctx, runID, pts)
 
-clusters, err := store.QueryClusterSummary(ctx, "umap_2d")
+clusters, err := store.QueryClusterSummary(ctx, "umap_2d", 0)
 if err != nil {
 t.Fatalf("QueryClusterSummary: %v", err)
 }
@@ -199,7 +199,7 @@ pts := []gbf.ProjectionPoint{
 store.InsertProjectionBatch(ctx, runID, pts)
 
 cluster0 := 0
-rows, err := store.QueryProjections(ctx, "umap_2d", gbf.ProjectionFilter{ClusterID: &cluster0})
+rows, err := store.QueryProjections(ctx, "umap_2d", 0, gbf.ProjectionFilter{ClusterID: &cluster0})
 if err != nil {
 t.Fatalf("QueryProjections: %v", err)
 }

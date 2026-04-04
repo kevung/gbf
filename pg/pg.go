@@ -544,11 +544,15 @@ func (s *PGStore) PositionByID(ctx context.Context, id int64) (*gbf.PositionWith
 // CreateProjectionRun inserts a projection run and returns its ID.
 func (s *PGStore) CreateProjectionRun(ctx context.Context, run gbf.ProjectionRun) (int64, error) {
 	var id int64
+	var boundsArg any
+	if run.BoundsJSON != "" {
+		boundsArg = run.BoundsJSON
+	}
 	err := s.conn().QueryRow(ctx, `
-		INSERT INTO projection_runs (method, feature_version, params, n_points, is_active)
-		VALUES ($1, $2, $3, $4, FALSE)
+		INSERT INTO projection_runs (method, feature_version, params, n_points, is_active, lod, bounds_json)
+		VALUES ($1, $2, $3, $4, FALSE, $5, $6)
 		RETURNING id`,
-		run.Method, run.FeatureVersion, run.Params, run.NPoints,
+		run.Method, run.FeatureVersion, run.Params, run.NPoints, run.LoD, boundsArg,
 	).Scan(&id)
 	if err != nil {
 		return 0, fmt.Errorf("create projection run: %w", err)
@@ -556,17 +560,18 @@ func (s *PGStore) CreateProjectionRun(ctx context.Context, run gbf.ProjectionRun
 	return id, nil
 }
 
-// ActivateProjectionRun activates the given run and deactivates others with the same method.
+// ActivateProjectionRun activates the given run and deactivates others with the same (method, lod).
 func (s *PGStore) ActivateProjectionRun(ctx context.Context, runID int64) error {
 	var method string
+	var lod int
 	err := s.conn().QueryRow(ctx,
-		`SELECT method FROM projection_runs WHERE id = $1`, runID,
-	).Scan(&method)
+		`SELECT method, COALESCE(lod,0) FROM projection_runs WHERE id = $1`, runID,
+	).Scan(&method, &lod)
 	if err != nil {
 		return fmt.Errorf("lookup projection run: %w", err)
 	}
 	if _, err := s.conn().Exec(ctx,
-		`UPDATE projection_runs SET is_active = FALSE WHERE method = $1`, method,
+		`UPDATE projection_runs SET is_active = FALSE WHERE method = $1 AND COALESCE(lod,0) = $2`, method, lod,
 	); err != nil {
 		return fmt.Errorf("deactivate runs: %w", err)
 	}
@@ -594,27 +599,60 @@ func (s *PGStore) InsertProjectionBatch(ctx context.Context, runID int64, pts []
 	return nil
 }
 
-// ActiveProjectionRun returns the active run for the given method, or (nil, nil).
-func (s *PGStore) ActiveProjectionRun(ctx context.Context, method string) (*gbf.ProjectionRun, error) {
+// ActiveProjectionRun returns the active run for the given (method, lod), or (nil, nil).
+func (s *PGStore) ActiveProjectionRun(ctx context.Context, method string, lod int) (*gbf.ProjectionRun, error) {
 	var r gbf.ProjectionRun
+	var boundsJSON *string
 	err := s.conn().QueryRow(ctx, `
 		SELECT id, method, feature_version, COALESCE(params::TEXT,''), COALESCE(n_points,0),
-		       COALESCE(created_at::TEXT,''), is_active
+		       COALESCE(created_at::TEXT,''), is_active, COALESCE(lod,0), bounds_json
 		FROM projection_runs
-		WHERE method = $1 AND is_active = TRUE`, method,
-	).Scan(&r.ID, &r.Method, &r.FeatureVersion, &r.Params, &r.NPoints, &r.CreatedAt, &r.IsActive)
+		WHERE method = $1 AND COALESCE(lod,0) = $2 AND is_active = TRUE`, method, lod,
+	).Scan(&r.ID, &r.Method, &r.FeatureVersion, &r.Params, &r.NPoints, &r.CreatedAt, &r.IsActive, &r.LoD, &boundsJSON)
 	if err != nil {
 		if err.Error() == "no rows in result set" {
 			return nil, nil
 		}
 		return nil, fmt.Errorf("active projection run: %w", err)
 	}
+	if boundsJSON != nil {
+		r.BoundsJSON = *boundsJSON
+	}
 	return &r, nil
 }
 
-// QueryProjections returns projection points for the active run.
-func (s *PGStore) QueryProjections(ctx context.Context, method string, f gbf.ProjectionFilter) ([]gbf.ProjectionRow, error) {
-	run, err := s.ActiveProjectionRun(ctx, method)
+// ListActiveProjectionRuns returns all active runs across all (method, lod) pairs.
+func (s *PGStore) ListActiveProjectionRuns(ctx context.Context) ([]gbf.ProjectionRun, error) {
+	rows, err := s.conn().Query(ctx, `
+		SELECT id, method, feature_version, COALESCE(params::TEXT,''), COALESCE(n_points,0),
+		       COALESCE(created_at::TEXT,''), is_active, COALESCE(lod,0), bounds_json
+		FROM projection_runs
+		WHERE is_active = TRUE
+		ORDER BY method, lod`)
+	if err != nil {
+		return nil, fmt.Errorf("list active runs: %w", err)
+	}
+	defer rows.Close()
+
+	var out []gbf.ProjectionRun
+	for rows.Next() {
+		var r gbf.ProjectionRun
+		var boundsJSON *string
+		if err := rows.Scan(&r.ID, &r.Method, &r.FeatureVersion, &r.Params, &r.NPoints,
+			&r.CreatedAt, &r.IsActive, &r.LoD, &boundsJSON); err != nil {
+			return nil, fmt.Errorf("scan run: %w", err)
+		}
+		if boundsJSON != nil {
+			r.BoundsJSON = *boundsJSON
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// QueryProjections returns projection points for the active run of (method, lod).
+func (s *PGStore) QueryProjections(ctx context.Context, method string, lod int, f gbf.ProjectionFilter) ([]gbf.ProjectionRow, error) {
+	run, err := s.ActiveProjectionRun(ctx, method, lod)
 	if err != nil {
 		return nil, err
 	}
@@ -680,9 +718,9 @@ func (s *PGStore) QueryProjections(ctx context.Context, method string, f gbf.Pro
 	return out, rows.Err()
 }
 
-// QueryClusterSummary returns per-cluster counts and centroids for the active run.
-func (s *PGStore) QueryClusterSummary(ctx context.Context, method string) ([]gbf.ClusterSummary, error) {
-	run, err := s.ActiveProjectionRun(ctx, method)
+// QueryClusterSummary returns per-cluster counts and centroids for the active run of (method, lod).
+func (s *PGStore) QueryClusterSummary(ctx context.Context, method string, lod int) ([]gbf.ClusterSummary, error) {
+	run, err := s.ActiveProjectionRun(ctx, method, lod)
 	if err != nil {
 		return nil, err
 	}
@@ -710,6 +748,128 @@ func (s *PGStore) QueryClusterSummary(ctx context.Context, method string) ([]gbf
 		out = append(out, c)
 	}
 	return out, rows.Err()
+}
+
+// ExportAllFeatures extracts position IDs and feature vectors from the store.
+// If sampleSize > 0 and less than total positions, a deterministic subsample is used.
+func (s *PGStore) ExportAllFeatures(ctx context.Context, sampleSize int, seed uint64) ([]int64, [][]float64, error) {
+	var total int64
+	if err := s.pool.QueryRow(ctx, "SELECT COUNT(*) FROM positions").Scan(&total); err != nil {
+		return nil, nil, fmt.Errorf("count positions: %w", err)
+	}
+	if total == 0 {
+		return nil, nil, nil
+	}
+
+	query := "SELECT id, base_record FROM positions"
+	if sampleSize > 0 && int64(sampleSize) < total {
+		step := int(total) / sampleSize
+		if step < 1 {
+			step = 1
+		}
+		query = fmt.Sprintf("SELECT id, base_record FROM positions WHERE id %% %d = 0 LIMIT %d", step, sampleSize)
+	}
+
+	rows, err := s.pool.Query(ctx, query)
+	if err != nil {
+		return nil, nil, fmt.Errorf("query positions: %w", err)
+	}
+	defer rows.Close()
+
+	var ids []int64
+	var features [][]float64
+	for rows.Next() {
+		var id int64
+		var blob []byte
+		if err := rows.Scan(&id, &blob); err != nil {
+			continue
+		}
+		rec, err := gbf.UnmarshalBaseRecord(blob)
+		if err != nil {
+			continue
+		}
+		ids = append(ids, id)
+		features = append(features, gbf.ExtractAllFeatures(*rec))
+	}
+	return ids, features, rows.Err()
+}
+
+// ExportStratifiedFeatures extracts position IDs and feature vectors, sampling
+// proportionally from each pos_class to preserve the class distribution.
+func (s *PGStore) ExportStratifiedFeatures(ctx context.Context, sampleSize int, seed uint64) ([]int64, [][]float64, error) {
+	var total int64
+	if err := s.pool.QueryRow(ctx, "SELECT COUNT(*) FROM positions").Scan(&total); err != nil {
+		return nil, nil, fmt.Errorf("count positions: %w", err)
+	}
+	if total == 0 {
+		return nil, nil, nil
+	}
+
+	if sampleSize <= 0 || int64(sampleSize) >= total {
+		return s.ExportAllFeatures(ctx, 0, seed)
+	}
+
+	classRows, err := s.pool.Query(ctx,
+		`SELECT COALESCE(pos_class,0), COUNT(*) FROM positions GROUP BY pos_class ORDER BY pos_class`)
+	if err != nil {
+		return nil, nil, fmt.Errorf("class counts: %w", err)
+	}
+	type classBucket struct {
+		cls   int
+		count int64
+	}
+	var buckets []classBucket
+	for classRows.Next() {
+		var b classBucket
+		if err := classRows.Scan(&b.cls, &b.count); err != nil {
+			classRows.Close()
+			return nil, nil, fmt.Errorf("scan class count: %w", err)
+		}
+		buckets = append(buckets, b)
+	}
+	classRows.Close()
+
+	var ids []int64
+	var features [][]float64
+
+	for _, b := range buckets {
+		classSample := int(int64(sampleSize) * b.count / total)
+		if classSample < 1 {
+			classSample = 1
+		}
+
+		var q string
+		if int64(classSample) >= b.count {
+			q = fmt.Sprintf(`SELECT id, base_record FROM positions WHERE COALESCE(pos_class,0) = %d`, b.cls)
+		} else {
+			step := int(b.count) / classSample
+			if step < 1 {
+				step = 1
+			}
+			q = fmt.Sprintf(`SELECT id, base_record FROM positions WHERE COALESCE(pos_class,0) = %d AND id %% %d = 0 LIMIT %d`,
+				b.cls, step, classSample)
+		}
+
+		rows, err := s.pool.Query(ctx, q)
+		if err != nil {
+			return nil, nil, fmt.Errorf("stratified query class=%d: %w", b.cls, err)
+		}
+		for rows.Next() {
+			var id int64
+			var blob []byte
+			if err := rows.Scan(&id, &blob); err != nil {
+				continue
+			}
+			rec, err := gbf.UnmarshalBaseRecord(blob)
+			if err != nil {
+				continue
+			}
+			ids = append(ids, id)
+			features = append(features, gbf.ExtractAllFeatures(*rec))
+		}
+		rows.Close()
+	}
+	return ids, features, nil
 }
 
 // ── Querier adapters ──────────────────────────────────────────────────────────

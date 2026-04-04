@@ -351,7 +351,9 @@ CREATE TABLE projection_runs (
     params          JSONB/TEXT,             -- hyperparameters
     n_points        INTEGER,
     created_at      TIMESTAMP,
-    is_active       BOOLEAN DEFAULT FALSE   -- one active per method
+    is_active       BOOLEAN DEFAULT FALSE,  -- one active per (method, lod)
+    lod             INTEGER DEFAULT 0,      -- M10.3: 0=overview, 1=medium, 2=complete
+    bounds_json     TEXT                    -- M10.3: {"min_x":…,"max_x":…,…}
 );
 
 CREATE TABLE projections (
@@ -364,7 +366,8 @@ CREATE TABLE projections (
 **Lifecycle**: when features change (e.g., removing pip_diff from the vector),
 a new `projection_run` is created with a new `feature_version`. The old run
 stays in the database for comparison. Activating the new run is atomic
-(deactivate old → activate new).
+(deactivate old for same (method, lod) → activate new). Multiple runs can be
+active simultaneously — one per (method × lod) combination.
 
 ### Algorithm Optimization (M10)
 

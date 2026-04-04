@@ -104,7 +104,10 @@ CREATE TABLE IF NOT EXISTS projection_runs (
     params          TEXT,                   -- JSON: {n_neighbors, min_dist, ...}
     n_points        INTEGER,
     created_at      TEXT DEFAULT (datetime('now')),
-    is_active       INTEGER DEFAULT 0       -- 1 = active, 0 = archived
+    is_active       INTEGER DEFAULT 0,      -- 1 = active, 0 = archived
+    -- M10.3: LoD level (0=overview ~5-10K, 1=medium ~50-100K, 2=complete)
+    lod             INTEGER DEFAULT 0,
+    bounds_json     TEXT                    -- {"min_x":…,"max_x":…,"min_y":…,"max_y":…}
 );
 
 CREATE TABLE IF NOT EXISTS projections (

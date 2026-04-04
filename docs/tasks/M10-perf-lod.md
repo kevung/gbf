@@ -262,7 +262,7 @@ M10.1, M10.3, and M10.6 can proceed in parallel after M10.0.
 - [x] HDBSCAN uses real quickselect + parallel core distances + VP-tree for n ≥ 1000 (M10.1/M10.2)
 - [x] t-SNE pre-allocates qNum (M10.1)
 - [x] Parallel UMAP SGD via edge-chunked goroutines + atomic CAS (M10.2d, race-clean)
-- [ ] LoD 0 computes in < 30s on 1.57M position database
+- [x] LoD 0 computes in < 30s on 1.57M position database
 - [ ] Tile API serves pre-computed tiles with cache headers
 - [ ] deck.gl frontend renders tiles with zoom/pan
 - [ ] Import throughput > 20K pos/s

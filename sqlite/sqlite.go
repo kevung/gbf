@@ -92,6 +92,19 @@ func NewSQLiteStore(path string) (*SQLiteStore, error) {
 		return nil, fmt.Errorf("create schema: %w", err)
 	}
 
+	// M10.3: migrate existing projection_runs table to add lod + bounds_json.
+	for _, stmt := range []string{
+		`ALTER TABLE projection_runs ADD COLUMN lod INTEGER DEFAULT 0`,
+		`ALTER TABLE projection_runs ADD COLUMN bounds_json TEXT`,
+	} {
+		if _, err := db.Exec(stmt); err != nil {
+			if !strings.Contains(err.Error(), "duplicate column name") {
+				db.Close()
+				return nil, fmt.Errorf("migrate schema: %w", err)
+			}
+		}
+	}
+
 	return &SQLiteStore{db: db}, nil
 }
 
@@ -569,9 +582,9 @@ func (s *SQLiteStore) PositionMatchMetadata(ctx context.Context, posID int64, li
 // CreateProjectionRun inserts a projection run and returns its ID.
 func (s *SQLiteStore) CreateProjectionRun(ctx context.Context, run gbf.ProjectionRun) (int64, error) {
 	res, err := s.conn().ExecContext(ctx, `
-		INSERT INTO projection_runs (method, feature_version, params, n_points, is_active)
-		VALUES (?, ?, ?, ?, 0)`,
-		run.Method, run.FeatureVersion, run.Params, run.NPoints,
+		INSERT INTO projection_runs (method, feature_version, params, n_points, is_active, lod, bounds_json)
+		VALUES (?, ?, ?, ?, 0, ?, ?)`,
+		run.Method, run.FeatureVersion, run.Params, run.NPoints, run.LoD, nullableText(run.BoundsJSON),
 	)
 	if err != nil {
 		return 0, fmt.Errorf("create projection run: %w", err)
@@ -580,18 +593,19 @@ func (s *SQLiteStore) CreateProjectionRun(ctx context.Context, run gbf.Projectio
 }
 
 // ActivateProjectionRun sets is_active=1 for the given run and deactivates
-// all other runs with the same method.
+// all other runs with the same (method, lod).
 func (s *SQLiteStore) ActivateProjectionRun(ctx context.Context, runID int64) error {
-	// Get method for this run.
+	// Get method and lod for this run.
 	var method string
+	var lod int
 	err := s.conn().QueryRowContext(ctx,
-		`SELECT method FROM projection_runs WHERE id = ?`, runID,
-	).Scan(&method)
+		`SELECT method, COALESCE(lod,0) FROM projection_runs WHERE id = ?`, runID,
+	).Scan(&method, &lod)
 	if err != nil {
 		return fmt.Errorf("lookup projection run: %w", err)
 	}
 	if _, err := s.conn().ExecContext(ctx,
-		`UPDATE projection_runs SET is_active = 0 WHERE method = ?`, method,
+		`UPDATE projection_runs SET is_active = 0 WHERE method = ? AND COALESCE(lod,0) = ?`, method, lod,
 	); err != nil {
 		return fmt.Errorf("deactivate runs: %w", err)
 	}
@@ -618,27 +632,60 @@ func (s *SQLiteStore) InsertProjectionBatch(ctx context.Context, runID int64, pt
 	return nil
 }
 
-// ActiveProjectionRun returns the active run for the given method, or (nil, nil).
-func (s *SQLiteStore) ActiveProjectionRun(ctx context.Context, method string) (*gbf.ProjectionRun, error) {
+// ActiveProjectionRun returns the active run for the given (method, lod), or (nil, nil).
+func (s *SQLiteStore) ActiveProjectionRun(ctx context.Context, method string, lod int) (*gbf.ProjectionRun, error) {
 	var r gbf.ProjectionRun
+	var boundsJSON sql.NullString
 	err := s.conn().QueryRowContext(ctx, `
 		SELECT id, method, feature_version, COALESCE(params,''), COALESCE(n_points,0),
-		       COALESCE(created_at,''), is_active
+		       COALESCE(created_at,''), is_active, COALESCE(lod,0), bounds_json
 		FROM projection_runs
-		WHERE method = ? AND is_active = 1`, method,
-	).Scan(&r.ID, &r.Method, &r.FeatureVersion, &r.Params, &r.NPoints, &r.CreatedAt, &r.IsActive)
+		WHERE method = ? AND COALESCE(lod,0) = ? AND is_active = 1`, method, lod,
+	).Scan(&r.ID, &r.Method, &r.FeatureVersion, &r.Params, &r.NPoints, &r.CreatedAt, &r.IsActive, &r.LoD, &boundsJSON)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, fmt.Errorf("active projection run: %w", err)
 	}
+	if boundsJSON.Valid {
+		r.BoundsJSON = boundsJSON.String
+	}
 	return &r, nil
 }
 
-// QueryProjections returns projection points for the active run.
-func (s *SQLiteStore) QueryProjections(ctx context.Context, method string, f gbf.ProjectionFilter) ([]gbf.ProjectionRow, error) {
-	run, err := s.ActiveProjectionRun(ctx, method)
+// ListActiveProjectionRuns returns all active runs across all (method, lod) pairs.
+func (s *SQLiteStore) ListActiveProjectionRuns(ctx context.Context) ([]gbf.ProjectionRun, error) {
+	rows, err := s.conn().QueryContext(ctx, `
+		SELECT id, method, feature_version, COALESCE(params,''), COALESCE(n_points,0),
+		       COALESCE(created_at,''), is_active, COALESCE(lod,0), bounds_json
+		FROM projection_runs
+		WHERE is_active = 1
+		ORDER BY method, lod`)
+	if err != nil {
+		return nil, fmt.Errorf("list active runs: %w", err)
+	}
+	defer rows.Close()
+
+	var out []gbf.ProjectionRun
+	for rows.Next() {
+		var r gbf.ProjectionRun
+		var boundsJSON sql.NullString
+		if err := rows.Scan(&r.ID, &r.Method, &r.FeatureVersion, &r.Params, &r.NPoints,
+			&r.CreatedAt, &r.IsActive, &r.LoD, &boundsJSON); err != nil {
+			return nil, fmt.Errorf("scan run: %w", err)
+		}
+		if boundsJSON.Valid {
+			r.BoundsJSON = boundsJSON.String
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// QueryProjections returns projection points for the active run of (method, lod).
+func (s *SQLiteStore) QueryProjections(ctx context.Context, method string, lod int, f gbf.ProjectionFilter) ([]gbf.ProjectionRow, error) {
+	run, err := s.ActiveProjectionRun(ctx, method, lod)
 	if err != nil {
 		return nil, err
 	}
@@ -708,9 +755,9 @@ func (s *SQLiteStore) QueryProjections(ctx context.Context, method string, f gbf
 	return out, rows.Err()
 }
 
-// QueryClusterSummary returns per-cluster counts and centroids for the active run.
-func (s *SQLiteStore) QueryClusterSummary(ctx context.Context, method string) ([]gbf.ClusterSummary, error) {
-	run, err := s.ActiveProjectionRun(ctx, method)
+// QueryClusterSummary returns per-cluster counts and centroids for the active run of (method, lod).
+func (s *SQLiteStore) QueryClusterSummary(ctx context.Context, method string, lod int) ([]gbf.ClusterSummary, error) {
+	run, err := s.ActiveProjectionRun(ctx, method, lod)
 	if err != nil {
 		return nil, err
 	}
@@ -783,4 +830,101 @@ func (s *SQLiteStore) ExportAllFeatures(ctx context.Context, sampleSize int, see
 		features = append(features, gbf.ExtractAllFeatures(*rec))
 	}
 	return ids, features, rows.Err()
+}
+
+// ExportStratifiedFeatures extracts position IDs and feature vectors, sampling
+// proportionally from each pos_class so that the class distribution is preserved.
+// If sampleSize <= 0 or >= total, all positions are returned (no sampling).
+func (s *SQLiteStore) ExportStratifiedFeatures(ctx context.Context, sampleSize int, seed uint64) ([]int64, [][]float64, error) {
+	var total int64
+	if err := s.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM positions").Scan(&total); err != nil {
+		return nil, nil, fmt.Errorf("count positions: %w", err)
+	}
+	if total == 0 {
+		return nil, nil, nil
+	}
+
+	if sampleSize <= 0 || int64(sampleSize) >= total {
+		return s.ExportAllFeatures(ctx, 0, seed)
+	}
+
+	// Get per-class counts to determine proportional sample sizes.
+	classRows, err := s.db.QueryContext(ctx,
+		`SELECT COALESCE(pos_class,0), COUNT(*) FROM positions GROUP BY pos_class ORDER BY pos_class`)
+	if err != nil {
+		return nil, nil, fmt.Errorf("class counts: %w", err)
+	}
+	type classBucket struct {
+		cls   int
+		count int64
+	}
+	var buckets []classBucket
+	for classRows.Next() {
+		var b classBucket
+		if err := classRows.Scan(&b.cls, &b.count); err != nil {
+			classRows.Close()
+			return nil, nil, fmt.Errorf("scan class count: %w", err)
+		}
+		buckets = append(buckets, b)
+	}
+	classRows.Close()
+	if err := classRows.Err(); err != nil {
+		return nil, nil, err
+	}
+
+	var ids []int64
+	var features [][]float64
+
+	for _, b := range buckets {
+		// Proportional sample size for this class.
+		classSample := int(int64(sampleSize) * b.count / total)
+		if classSample < 1 {
+			classSample = 1
+		}
+
+		var q string
+		if int64(classSample) >= b.count {
+			q = fmt.Sprintf(
+				`SELECT id, base_record FROM positions WHERE COALESCE(pos_class,0) = %d`, b.cls)
+		} else {
+			step := int(b.count) / classSample
+			if step < 1 {
+				step = 1
+			}
+			q = fmt.Sprintf(
+				`SELECT id, base_record FROM positions WHERE COALESCE(pos_class,0) = %d AND ROWID %% %d = 0 LIMIT %d`,
+				b.cls, step, classSample)
+		}
+
+		rows, err := s.db.QueryContext(ctx, q)
+		if err != nil {
+			return nil, nil, fmt.Errorf("stratified query class=%d: %w", b.cls, err)
+		}
+		for rows.Next() {
+			var id int64
+			var blob []byte
+			if err := rows.Scan(&id, &blob); err != nil {
+				continue
+			}
+			rec, err := gbf.UnmarshalBaseRecord(blob)
+			if err != nil {
+				continue
+			}
+			ids = append(ids, id)
+			features = append(features, gbf.ExtractAllFeatures(*rec))
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			return nil, nil, fmt.Errorf("scan class=%d: %w", b.cls, err)
+		}
+	}
+	return ids, features, nil
+}
+
+// nullableText returns nil for an empty string (stores NULL), otherwise the string.
+func nullableText(s string) any {
+	if s == "" {
+		return nil
+	}
+	return s
 }

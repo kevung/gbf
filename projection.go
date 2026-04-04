@@ -272,6 +272,9 @@ type ProjectionConfig struct {
 	Seed           uint64
 	FeatureVersion string
 	ProgressFn     func(stage string, pct int) // optional progress callback
+	// M10.3: LoD level. 0=overview (~5-10K), 1=medium (~50-100K), 2=complete.
+	// For lod < 2 with SampleSize > 0, stratified sampling is used.
+	LoD int
 
 	// t-SNE specific.
 	Perplexity float64 // t-SNE perplexity (default 30)
@@ -292,10 +295,12 @@ type ProjectionConfig struct {
 
 // ProjectionComputeResult holds the computed projection + clustering.
 type ProjectionComputeResult struct {
-	Points  []ProjectionPoint
-	Method  string
-	Params  string
-	NPoints int
+	Points     []ProjectionPoint
+	Method     string
+	Params     string
+	NPoints    int
+	LoD        int    // M10.3: LoD level (0/1/2)
+	BoundsJSON string // M10.3: {"min_x":…,"max_x":…,"min_y":…,"max_y":…}
 }
 
 // ComputeProjectionFromStore extracts features from the store, computes
@@ -329,17 +334,35 @@ func ComputeProjectionFromStore(ctx context.Context, store Store, cfg Projection
 	var ids []int64
 	var features [][]float64
 
-	// Try to get DB handle for direct queries.
-	if accessor, ok := store.(interface {
+	// Use stratified sampling for LoD 0/1 when SampleSize is set, to preserve
+	// class distribution. Fall back to uniform sampling for LoD 2 (full dataset).
+	type stratifiedExporter interface {
+		ExportStratifiedFeatures(ctx context.Context, sampleSize int, seed uint64) ([]int64, [][]float64, error)
+	}
+	type allFeaturesExporter interface {
 		ExportAllFeatures(ctx context.Context, sampleSize int, seed uint64) ([]int64, [][]float64, error)
-	}); ok {
-		var err error
-		ids, features, err = accessor.ExportAllFeatures(ctx, cfg.SampleSize, cfg.Seed)
-		if err != nil {
-			return nil, fmt.Errorf("export features: %w", err)
+	}
+
+	if cfg.LoD < 2 && cfg.SampleSize > 0 {
+		if se, ok := store.(stratifiedExporter); ok {
+			var err error
+			ids, features, err = se.ExportStratifiedFeatures(ctx, cfg.SampleSize, cfg.Seed)
+			if err != nil {
+				return nil, fmt.Errorf("export stratified features: %w", err)
+			}
 		}
-	} else {
-		return nil, fmt.Errorf("store does not support ExportAllFeatures")
+	}
+	if ids == nil {
+		// Fallback: uniform sampling via ExportAllFeatures.
+		if accessor, ok := store.(allFeaturesExporter); ok {
+			var err error
+			ids, features, err = accessor.ExportAllFeatures(ctx, cfg.SampleSize, cfg.Seed)
+			if err != nil {
+				return nil, fmt.Errorf("export features: %w", err)
+			}
+		} else {
+			return nil, fmt.Errorf("store does not support ExportAllFeatures")
+		}
 	}
 
 	if len(ids) == 0 {
@@ -517,11 +540,16 @@ func ComputeProjectionFromStore(ctx context.Context, store Store, cfg Projection
 		featureInfo = fmt.Sprintf(`"features":%d`, len(cfg.FeatureIndices))
 	}
 
+	// Compute projection bounds (min/max x/y) for LoD tile system.
+	boundsJSON := computeBoundsJSON(embedding)
+
 	return &ProjectionComputeResult{
-		Points:  points,
-		Method:  cfg.Method,
-		Params:  fmt.Sprintf(`{%s,"n":%d,%s,%s}`, varianceInfo, len(ids), clusterInfo, featureInfo),
-		NPoints: len(ids),
+		Points:     points,
+		Method:     cfg.Method,
+		Params:     fmt.Sprintf(`{%s,"n":%d,%s,%s}`, varianceInfo, len(ids), clusterInfo, featureInfo),
+		NPoints:    len(ids),
+		LoD:        cfg.LoD,
+		BoundsJSON: boundsJSON,
 	}, nil
 }
 
@@ -537,6 +565,8 @@ func SaveProjectionResult(ctx context.Context, store Store, result *ProjectionCo
 		Params:         result.Params,
 		NPoints:        result.NPoints,
 		CreatedAt:      time.Now().UTC().Format(time.RFC3339),
+		LoD:            result.LoD,
+		BoundsJSON:     result.BoundsJSON,
 	}
 
 	runID, err := store.CreateProjectionRun(ctx, run)
@@ -729,4 +759,29 @@ func SilhouetteScore(points [][]float64, labels []int, maxSample int) float64 {
 	}
 
 	return totalScore / float64(len(indices))
+}
+
+// computeBoundsJSON returns a JSON string with the min/max x/y of the embedding.
+func computeBoundsJSON(embedding [][]float64) string {
+	if len(embedding) == 0 {
+		return ""
+	}
+	minX, maxX := embedding[0][0], embedding[0][0]
+	minY, maxY := embedding[0][1], embedding[0][1]
+	for _, pt := range embedding[1:] {
+		if pt[0] < minX {
+			minX = pt[0]
+		}
+		if pt[0] > maxX {
+			maxX = pt[0]
+		}
+		if pt[1] < minY {
+			minY = pt[1]
+		}
+		if pt[1] > maxY {
+			maxY = pt[1]
+		}
+	}
+	return fmt.Sprintf(`{"min_x":%.6f,"max_x":%.6f,"min_y":%.6f,"max_y":%.6f}`,
+		minX, maxX, minY, maxY)
 }
