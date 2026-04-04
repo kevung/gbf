@@ -420,7 +420,21 @@ Pre-computed tiles following slippy map convention:
 7. Batch transactions (e.g., 1000 records per transaction)
 8. Log errors, track last imported file for resume capability
 
-In PostgreSQL: parallel imports enabled by MVCC.
+### Parallel Import (M10.6)
+
+`ImportDirectory` uses a fan-out pipeline:
+
+```
+files channel → [N parser goroutines] → results channel → [1 DB writer]
+```
+
+- N = `ImportOpts.Workers` (default: `runtime.NumCPU()`)
+- The DB writer accumulates `BatchSize` results then flushes a batch transaction
+- Journal and error log are written exclusively by the DB writer (no lock needed)
+- `Workers=1` disables parallelism for deterministic tests
+- Measured throughput: >20K positions/s on AMD Ryzen 7 PRO 6850U (16 threads)
+
+In PostgreSQL: parallel imports further enabled by MVCC (no single-writer constraint).
 
 ## Resolved Questions (from Phase 1)
 

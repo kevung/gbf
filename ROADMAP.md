@@ -14,7 +14,7 @@
 | M6 Query API                 | ✅ Complete | 5 Go query methods, Python helper, migration tool |
 | M7 PostgreSQL Backend        | ✅ Complete | PGStore + pgxpool, migration SQLite→PG, concurrency tests (race-clean) |
 | M8 Visualization SaaS        | ✅ Complete | Projection runs, viz API (4 endpoints), import-projections CLI |
-| M10 Performance + LoD + Tiles | 🔄 In progress | M10.0+M10.1 done; M10.2 done (VP-tree + parallel SGD); M10.3 done (LoD system + stratified sampling); M10.4 done (tile system); M10.6 done (parallel import, fan-out pipeline, target >20K pos/s) |
+| M10 Performance + LoD + Tiles | ✅ Complete | All sub-steps done: VP-tree, parallel SGD, LoD system, tile system, deck.gl frontend, parallel import, E2E integration tests |
 
 ## Overview
 
@@ -293,7 +293,7 @@ fluid rendering.
    tiles, LoD→zoom mapping, tile API endpoints
 6. ✅ M10.5 — Frontend: deck.gl TileLayer replacing ECharts scatter plot
 7. ✅ M10.6 — Import parallelization: fan-out parsing pipeline (NumCPU workers, target >20K pos/s)
-8. M10.7 — Integration testing + documentation updates
+7. ✅ M10.7 — Integration testing + documentation updates: E2E test (import→projection→tiles→API), ROADMAP/ARCHITECTURE/task-sheet updated
 
 **Dependency graph**:
 ```

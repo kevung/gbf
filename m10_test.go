@@ -1,6 +1,7 @@
 package gbf_test
 
 // M10.3 — LoD system tests.
+// M10.7 — Integration + final documentation tests.
 
 import (
 	"context"
@@ -437,4 +438,144 @@ func TestAPIRuns_LoDField(t *testing.T) {
 	if lodSeen[1] != 1 {
 		t.Errorf("expected 1 lod=1 run, got %d", lodSeen[1])
 	}
+}
+
+// ── M10.7: Integration E2E ───────────────────────────────────────────────────
+
+// [F] End-to-end pipeline: import 100 files → compute LoD 0 projection →
+// build tiles → verify tile API responses.
+//
+// Uses PCA (fast, deterministic) instead of UMAP to keep test latency low.
+// Requires the BMAB dataset in data/bmab-2025-06-23; skipped otherwise.
+func TestE2EImportProjectionTile(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping E2E test in short mode")
+	}
+	dir := bmabDir(t) // skips if BMAB not found
+
+	store := openSQLiteStore(t)
+	ctx := context.Background()
+
+	// ── Step 1: import 100 files via parallel fan-out pipeline ────────────
+	report, err := gbf.ImportDirectory(ctx, store, dir, gbf.ImportOpts{
+		BatchSize:  50,
+		Limit:      100,
+		FileParser: xgParser,
+		EngineName: "eXtreme Gammon",
+		Workers:    0, // runtime.NumCPU()
+	})
+	if err != nil {
+		t.Fatalf("ImportDirectory: %v", err)
+	}
+	if report.Positions == 0 {
+		t.Fatal("expected positions > 0 after import")
+	}
+	t.Logf("import: files=%d positions=%d", report.FilesImported, report.Positions)
+
+	// ── Step 2: compute LoD 0 PCA projection ─────────────────────────────
+	result, err := gbf.ComputeProjectionFromStore(ctx, store, gbf.ProjectionConfig{
+		Method:         "pca_2d",
+		LoD:            0,
+		SampleSize:     2000, // cap for deterministic test speed
+		K:              6,
+		Seed:           42,
+		FeatureVersion: "v1.0",
+	})
+	if err != nil {
+		t.Fatalf("ComputeProjectionFromStore: %v", err)
+	}
+	if result.NPoints == 0 {
+		t.Fatal("expected NPoints > 0")
+	}
+	if result.BoundsJSON == "" {
+		t.Fatal("expected non-empty BoundsJSON")
+	}
+	t.Logf("projection: n=%d bounds=%s", result.NPoints, result.BoundsJSON)
+
+	// ── Step 3: save projection (triggers BuildTiles internally) ──────────
+	if err := gbf.SaveProjectionResult(ctx, store, result, "v1.0"); err != nil {
+		t.Fatalf("SaveProjectionResult: %v", err)
+	}
+
+	// ── Step 4: verify tiles were pre-computed ────────────────────────────
+	run, err := store.ActiveProjectionRun(ctx, "pca_2d", 0)
+	if err != nil || run == nil {
+		t.Fatalf("ActiveProjectionRun: run=%v err=%v", run, err)
+	}
+	meta, err := store.QueryTileMeta(ctx, run.ID)
+	if err != nil {
+		t.Fatalf("QueryTileMeta: %v", err)
+	}
+	if meta == nil {
+		t.Fatal("expected tiles to be built by SaveProjectionResult")
+	}
+	if meta.TileCount == 0 {
+		t.Error("tile_count should be > 0")
+	}
+	// LoD 0 zoom range is 0–2.
+	if meta.MinZoom != 0 || meta.MaxZoom != 2 {
+		t.Errorf("zoom range = [%d,%d], want [0,2]", meta.MinZoom, meta.MaxZoom)
+	}
+	t.Logf("tiles: count=%d zoom=[%d,%d]", meta.TileCount, meta.MinZoom, meta.MaxZoom)
+
+	// ── Step 5: serve via HTTP and query the tile API ─────────────────────
+	srv := viz.NewServer(store)
+	mux := http.NewServeMux()
+	srv.RegisterRoutes(mux)
+	ts := httptest.NewServer(mux)
+	t.Cleanup(ts.Close)
+
+	// Zoom-0 tile covers the entire projection space — must contain all points.
+	tileResp, err := http.Get(ts.URL + "/api/viz/tile/pca_2d/0/0/0/0")
+	if err != nil {
+		t.Fatalf("GET /api/viz/tile/pca_2d/0/0/0/0: %v", err)
+	}
+	defer tileResp.Body.Close()
+
+	if tileResp.StatusCode != http.StatusOK && tileResp.StatusCode != http.StatusNoContent {
+		t.Errorf("tile status: %d, want 200 or 204", tileResp.StatusCode)
+	}
+	if tileResp.StatusCode == http.StatusOK {
+		// The Go HTTP client transparently decompresses gzip Content-Encoding,
+		// so the body is plain JSON at this point.
+		var pts []gbf.TilePoint
+		if err := json.NewDecoder(tileResp.Body).Decode(&pts); err != nil {
+			t.Fatalf("decode tile JSON: %v", err)
+		}
+		if len(pts) == 0 {
+			t.Error("expected points in zoom-0 tile")
+		}
+		// All normalised coordinates must be in [0,1].
+		for i, pt := range pts {
+			if pt.X < 0 || pt.X > 1 || pt.Y < 0 || pt.Y > 1 {
+				t.Errorf("point[%d]: coords out of [0,1]: x=%f y=%f", i, pt.X, pt.Y)
+				break
+			}
+		}
+		t.Logf("zoom-0 tile: %d points", len(pts))
+	}
+
+	// ── Step 6: verify tilemeta endpoint ─────────────────────────────────
+	metaResp, err := http.Get(ts.URL + "/api/viz/tilemeta/pca_2d/0")
+	if err != nil {
+		t.Fatalf("GET /api/viz/tilemeta/pca_2d/0: %v", err)
+	}
+	defer metaResp.Body.Close()
+
+	if metaResp.StatusCode != http.StatusOK {
+		t.Fatalf("tilemeta status: %d, want 200", metaResp.StatusCode)
+	}
+	var tileMeta gbf.TileMeta
+	if err := json.NewDecoder(metaResp.Body).Decode(&tileMeta); err != nil {
+		t.Fatalf("decode tilemeta: %v", err)
+	}
+	if tileMeta.TileCount == 0 {
+		t.Error("tilemeta tile_count = 0")
+	}
+	if tileMeta.NPoints == 0 {
+		t.Error("tilemeta n_points = 0")
+	}
+	t.Logf("tilemeta: tile_count=%d n_points=%d zoom=[%d,%d]",
+		tileMeta.TileCount, tileMeta.NPoints, tileMeta.MinZoom, tileMeta.MaxZoom)
+
 }

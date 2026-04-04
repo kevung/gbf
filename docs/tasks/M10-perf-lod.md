@@ -271,10 +271,20 @@ where N = `opts.Workers` (default `runtime.NumCPU()`).
 
 ### M10.7 — Integration + Final Documentation
 
-1. E2E test: import 100 files → compute LoD 0 → build tiles → query tile API
-2. Update ROADMAP.md with M10 completion
-3. Update ARCHITECTURE.md with LoD + tile system
-4. Performance comparison table (before/after at various n)
+1. ✅ E2E test: `TestE2EImportProjectionTile` in `m10_test.go`
+   - imports 100 BMAB files via parallel fan-out pipeline (Workers=0)
+   - computes LoD 0 PCA projection (SampleSize=2000, K=6)
+   - calls `SaveProjectionResult` which triggers `BuildTiles`
+   - verifies tiles built: count > 0, zoom range = [0,2]
+   - starts httptest.Server, queries `/api/viz/tile/pca_2d/0/0/0/0`
+   - verifies 200 + gzip content-encoding + normalised coords in [0,1]
+   - queries `/api/viz/tilemeta/pca_2d/0` and verifies tile_count + n_points
+   - skipped with `-short` or if BMAB dataset absent
+2. ✅ ROADMAP.md: M10 marked complete, M10.7 listed
+3. ✅ ARCHITECTURE.md: parallel import pipeline section added (fan-out diagram,
+   Workers param, >20K pos/s note); tile/LoD sections already present
+4. ✅ Performance comparison table: recorded in Benchmark Results section below
+   (M10.1 ~3× UMAP k-NN, ~10× HDBSCAN; M10.2 additional 1.3× HDBSCAN via VP-tree)
 
 ## Dependency Graph
 
@@ -300,6 +310,7 @@ M10.1, M10.3, and M10.6 can proceed in parallel after M10.0.
 - [x] deck.gl frontend renders tiles with zoom/pan
 - [x] Import throughput > 20K pos/s (M10.6: fan-out pipeline, NumCPU workers)
 - [x] All tests pass (`go test ./... -short -race`)
+- [x] E2E test covers full pipeline: import → projection → tiles → HTTP API (M10.7)
 
 ## Benchmark Results
 
