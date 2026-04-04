@@ -1009,4 +1009,3 @@ func (s *PGStore) GCProjectionTiles(ctx context.Context) error {
 	}
 	return nil
 }
-

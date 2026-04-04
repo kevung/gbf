@@ -1039,4 +1039,3 @@ func (s *SQLiteStore) GCProjectionTiles(ctx context.Context) error {
 	}
 	return nil
 }
-
