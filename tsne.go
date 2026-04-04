@@ -89,6 +89,13 @@ func ComputeTSNE(points [][]float64, nComponents int, perplexity float64, maxIte
 		}
 	}
 
+	// M10.1e: allocate qNum once outside the loop; zero it each iteration
+	// instead of reallocating n×n slices every iter (reduces GC pressure).
+	qNum := make([][]float64, n)
+	for i := range qNum {
+		qNum[i] = make([]float64, n)
+	}
+
 	for iter := 0; iter < maxIter; iter++ {
 		if iter == stopExIter {
 			for i := 0; i < n; i++ {
@@ -98,10 +105,11 @@ func ComputeTSNE(points [][]float64, nComponents int, perplexity float64, maxIte
 			}
 		}
 
-		// Compute Q matrix (t-distribution).
-		qNum := make([][]float64, n)
+		// Zero qNum for this iteration.
 		for i := range qNum {
-			qNum[i] = make([]float64, n)
+			for j := range qNum[i] {
+				qNum[i][j] = 0
+			}
 		}
 		var qSum float64
 		for i := 0; i < n; i++ {

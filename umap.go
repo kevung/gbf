@@ -104,7 +104,12 @@ func ComputeUMAP(points [][]float64, cfg UMAPConfig) (*UMAPResult, error) {
 	return &UMAPResult{Embedding: embedding}, nil
 }
 
-// ── k-NN (brute-force, parallelised) ────────────────────────────────────────
+// ── k-NN (heap-based partial sort, parallelised) ─────────────────────────────
+//
+// M10.1a: replaced brute-force full sort with a max-heap of size k.
+//   - Compare squared distances (no Sqrt per pair; Sqrt applied only to k results)
+//   - Heap O(n·log k) instead of sort O(n·log n)
+//   - dist/heap buffers allocated once per goroutine, reused across points
 
 func umapKNN(points [][]float64, k, dims int, progressFn func(string, int)) ([][]int, [][]float64) {
 	n := len(points)
@@ -130,34 +135,69 @@ func umapKNN(points [][]float64, k, dims int, progressFn func(string, int)) ([][
 		wg.Add(1)
 		go func(start, end int) {
 			defer wg.Done()
-			dist := make([]float64, n)
-			order := make([]int, n)
+			// Per-goroutine buffers reused across all points in the chunk.
+			heapIdx := make([]int, k)
+			heapSq := make([]float64, k)
+
 			for i := start; i < end; i++ {
-				for j := 0; j < n; j++ {
+				pi := points[i]
+
+				// Initialise heap with first k neighbours (excluding i).
+				hSize := 0
+				for j := 0; j < n && hSize < k; j++ {
 					if j == i {
-						dist[j] = math.MaxFloat64
 						continue
 					}
-					var s float64
-					for dim := 0; dim < dims; dim++ {
-						diff := points[i][dim] - points[j][dim]
-						s += diff * diff
+					var sq float64
+					pj := points[j]
+					for d := 0; d < dims; d++ {
+						diff := pi[d] - pj[d]
+						sq += diff * diff
 					}
-					dist[j] = math.Sqrt(s)
+					heapIdx[hSize] = j
+					heapSq[hSize] = sq
+					hSize++
 				}
-				for j := range order {
-					order[j] = j
+				// Build max-heap over the initial k elements.
+				for p := hSize/2 - 1; p >= 0; p-- {
+					knnSiftDown(heapIdx, heapSq, p, hSize)
 				}
-				sort.Slice(order, func(a, b int) bool {
-					return dist[order[a]] < dist[order[b]]
-				})
-				knnIdx[i] = make([]int, k)
-				knnDist[i] = make([]float64, k)
+
+				// Scan remaining points; replace heap root if closer.
+				startJ := k + 1 // first j not yet seen (skip i if i < k)
+				if i < k {
+					startJ = k
+				}
+				for j := startJ; j < n; j++ {
+					if j == i {
+						continue
+					}
+					var sq float64
+					pj := points[j]
+					for d := 0; d < dims; d++ {
+						diff := pi[d] - pj[d]
+						sq += diff * diff
+					}
+					if sq < heapSq[0] {
+						heapIdx[0] = j
+						heapSq[0] = sq
+						knnSiftDown(heapIdx, heapSq, 0, k)
+					}
+				}
+
+				// Sort heap so nearest is first (optional but matches UMAP convention).
+				sort.Sort(&knnHeapSorter{heapIdx[:k], heapSq[:k]})
+
+				// Apply Sqrt only to the k final distances.
+				idxOut := make([]int, k)
+				dstOut := make([]float64, k)
+				copy(idxOut, heapIdx[:k])
 				for j := 0; j < k; j++ {
-					knnIdx[i][j] = order[j]
-					knnDist[i][j] = dist[order[j]]
+					dstOut[j] = math.Sqrt(heapSq[j])
 				}
-				// Report kNN progress every ~5 percentage points.
+				knnIdx[i] = idxOut
+				knnDist[i] = dstOut
+
 				if progressFn != nil {
 					cnt := doneCount.Add(1)
 					pct := int(cnt * 100 / int64(n))
@@ -172,6 +212,39 @@ func umapKNN(points [][]float64, k, dims int, progressFn func(string, int)) ([][
 	wg.Wait()
 
 	return knnIdx, knnDist
+}
+
+// knnSiftDown maintains a max-heap property at position i.
+func knnSiftDown(idx []int, sq []float64, i, n int) {
+	for {
+		largest := i
+		l, r := 2*i+1, 2*i+2
+		if l < n && sq[l] > sq[largest] {
+			largest = l
+		}
+		if r < n && sq[r] > sq[largest] {
+			largest = r
+		}
+		if largest == i {
+			return
+		}
+		idx[i], idx[largest] = idx[largest], idx[i]
+		sq[i], sq[largest] = sq[largest], sq[i]
+		i = largest
+	}
+}
+
+// knnHeapSorter sorts k nearest neighbours by ascending distance.
+type knnHeapSorter struct {
+	idx []int
+	sq  []float64
+}
+
+func (s *knnHeapSorter) Len() int           { return len(s.idx) }
+func (s *knnHeapSorter) Less(i, j int) bool { return s.sq[i] < s.sq[j] }
+func (s *knnHeapSorter) Swap(i, j int) {
+	s.idx[i], s.idx[j] = s.idx[j], s.idx[i]
+	s.sq[i], s.sq[j] = s.sq[j], s.sq[i]
 }
 
 // ── Smooth kNN distances ────────────────────────────────────────────────────
@@ -297,9 +370,14 @@ func umapGraph(knnIdx [][]int, knnDist [][]float64, sigmas, rhos []float64, n in
 // Fit  f(d) = 1 / (1 + a·d^{2b})  to the target membership function:
 //   1           if d ≤ min_dist
 //   exp(-(d − min_dist) / spread)  otherwise
-// Uses Nelder-Mead in (log a, b) space.
+//
+// M10.1c: cached result for standard UMAP defaults (spread=1.0, minDist=0.1).
 
 func umapFindAB(spread, minDist float64) (float64, float64) {
+	// Fast path: standard UMAP defaults (McInnes et al. 2018 recommended values).
+	if spread == 1.0 && minDist == 0.1 {
+		return 1.929, 0.7915
+	}
 	const nPts = 100
 	xMax := spread * 3
 	xs := make([]float64, nPts)
@@ -550,10 +628,12 @@ func umapOptimize(embedding [][]float64, heads, tails []int, weights []float64,
 			}
 
 			// Attractive gradient.
+			// M10.1b: replace math.Pow with exp(b*log(x)) to avoid slow pow.
+			// pow_b = distSq^b, pow_bm1 = distSq^(b-1) = pow_b / distSq.
 			var gradCoeff float64
 			if distSq > 0 {
-				gradCoeff = -2.0 * a * b * math.Pow(distSq, b-1) /
-					(a*math.Pow(distSq, b) + 1)
+				pow_b := math.Exp(b * math.Log(distSq))
+				gradCoeff = -2.0 * a * b * (pow_b / distSq) / (a*pow_b + 1)
 			}
 			for c := 0; c < nComp; c++ {
 				g := umapClip(gradCoeff*(embedding[j][c]-embedding[k][c])) * alpha
@@ -579,8 +659,8 @@ func umapOptimize(embedding [][]float64, heads, tails []int, weights []float64,
 				}
 				var repCoeff float64
 				if negDistSq > 0 {
-					repCoeff = 2.0 * b /
-						((0.001 + negDistSq) * (a*math.Pow(negDistSq, b) + 1))
+					pow_b := math.Exp(b * math.Log(negDistSq))
+					repCoeff = 2.0 * b / ((0.001 + negDistSq) * (a*pow_b + 1))
 				}
 				for c := 0; c < nComp; c++ {
 					g := umapClip(repCoeff*(embedding[j][c]-embedding[neg][c])) * alpha

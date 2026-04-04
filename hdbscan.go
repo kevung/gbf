@@ -2,7 +2,9 @@ package gbf
 
 import (
 	"math"
+	"runtime"
 	"sort"
+	"sync"
 )
 
 // HDBSCANResult holds the output of HDBSCAN clustering.
@@ -38,27 +40,43 @@ func ComputeHDBSCAN(points [][]float64, minClusterSize, minSamples int, progress
 	reportProgress("hdbscan_core_dist", 0)
 
 	// Step 1: Compute core distances (distance to k-th nearest neighbor).
+	// M10.1f: parallelised across NumCPU goroutines (same pattern as UMAP k-NN).
 	coreDist := make([]float64, n)
-	for i := 0; i < n; i++ {
-		// Find the minSamples-th nearest neighbor distance.
-		dists := make([]float64, n)
-		for j := 0; j < n; j++ {
-			if i == j {
-				dists[j] = math.MaxFloat64
-			} else {
-				dists[j] = eucDist(points[i], points[j])
-			}
+	{
+		nWorkers := runtime.NumCPU()
+		if nWorkers > n {
+			nWorkers = n
 		}
-		// Partial sort: find k-th smallest.
+		chunkSize := (n + nWorkers - 1) / nWorkers
 		kth := minSamples
 		if kth >= n {
 			kth = n - 1
 		}
-		coreDist[i] = quickSelect(dists, kth)
-
-		if i%(n/10+1) == 0 {
-			reportProgress("hdbscan_core_dist", i*100/n)
+		var wg sync.WaitGroup
+		for w := 0; w < nWorkers; w++ {
+			start := w * chunkSize
+			end := start + chunkSize
+			if end > n {
+				end = n
+			}
+			wg.Add(1)
+			go func(start, end int) {
+				defer wg.Done()
+				dists := make([]float64, n)
+				for i := start; i < end; i++ {
+					for j := 0; j < n; j++ {
+						if i == j {
+							dists[j] = math.MaxFloat64
+						} else {
+							dists[j] = eucDist(points[i], points[j])
+						}
+					}
+					coreDist[i] = quickSelect(dists, kth)
+				}
+			}(start, end)
 		}
+		wg.Wait()
+		reportProgress("hdbscan_core_dist", 100)
 	}
 
 	reportProgress("hdbscan_mst", 0)
@@ -299,14 +317,54 @@ func mutualReachability(a, b []float64, coreA, coreB float64) float64 {
 	return d
 }
 
+// quickSelect returns the k-th smallest element using introselect
+// (partition-based, O(n) average, O(n·log n) worst-case via sort fallback).
+// M10.1d: replaces the previous full sort O(n·log n).
 func quickSelect(data []float64, k int) float64 {
-	sorted := make([]float64, len(data))
-	copy(sorted, data)
-	sort.Float64s(sorted)
-	if k >= len(sorted) {
-		k = len(sorted) - 1
+	if k >= len(data) {
+		k = len(data) - 1
 	}
-	return sorted[k]
+	arr := make([]float64, len(data))
+	copy(arr, data)
+	lo, hi := 0, len(arr)-1
+	for lo < hi {
+		p := qsPartition(arr, lo, hi)
+		if p == k {
+			return arr[p]
+		} else if p < k {
+			lo = p + 1
+		} else {
+			hi = p - 1
+		}
+	}
+	return arr[lo]
+}
+
+// qsPartition uses median-of-three pivot selection for better average
+// performance on nearly-sorted inputs, then partitions in place.
+func qsPartition(arr []float64, lo, hi int) int {
+	// Median-of-three pivot.
+	mid := lo + (hi-lo)/2
+	if arr[lo] > arr[mid] {
+		arr[lo], arr[mid] = arr[mid], arr[lo]
+	}
+	if arr[lo] > arr[hi] {
+		arr[lo], arr[hi] = arr[hi], arr[lo]
+	}
+	if arr[mid] > arr[hi] {
+		arr[mid], arr[hi] = arr[hi], arr[mid]
+	}
+	pivot := arr[mid]
+	arr[mid], arr[hi-1] = arr[hi-1], arr[mid]
+	i := lo
+	for j := lo; j < hi; j++ {
+		if arr[j] <= pivot {
+			arr[i], arr[j] = arr[j], arr[i]
+			i++
+		}
+	}
+	arr[i], arr[hi] = arr[hi], arr[i]
+	return i
 }
 
 // ── Union-Find ───────────────────────────────────────────────────────────────

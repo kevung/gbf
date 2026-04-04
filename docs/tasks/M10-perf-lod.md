@@ -290,12 +290,18 @@ Key observations:
 
 ### After M10.1 (quick wins)
 
-_To be filled after M10.1 implementation._
+| Algorithm | n=1K | n=5K | n=10K | n=50K | Speedup vs baseline |
+|-----------|------|------|-------|-------|---------------------|
+| UMAP k-NN | 49ms | 391ms | 1.07s | 24.6s | **~3x** |
+| HDBSCAN | 8.6ms | 186ms | 776ms | 19.7s | **~10x** |
+| t-SNE | — | — | — | — | see below |
 
-| Algorithm | n=10K | n=50K | Speedup |
-|-----------|-------|-------|---------|
-| UMAP k-NN | — | — | — |
-| HDBSCAN | — | — | — |
+t-SNE (pre-alloc qNum only): n=500: 861ms→751ms, n=2K: 14.7s→14.1s (~5%). The
+gradient computation O(n²) dominates; pre-allocation has marginal impact. Real
+improvement requires Barnes-Hut (M10.2+).
+
+HDBSCAN gains: real quickselect O(n) vs sort O(n·log n) + parallel core distances.
+UMAP gains: heap O(n·log k) vs sort O(n·log n) + no Sqrt per pair + fast pow in SGD.
 
 ### After M10.2 (VP-tree)
 
