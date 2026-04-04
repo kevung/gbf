@@ -8,6 +8,7 @@ import (
 	"sort"
 	"sync"
 	"sync/atomic"
+	"unsafe"
 )
 
 // ── UMAP (pure Go) ──────────────────────────────────────────────────────────
@@ -104,12 +105,16 @@ func ComputeUMAP(points [][]float64, cfg UMAPConfig) (*UMAPResult, error) {
 	return &UMAPResult{Embedding: embedding}, nil
 }
 
-// ── k-NN (heap-based partial sort, parallelised) ─────────────────────────────
+// ── k-NN (VP-tree for n≥1000, heap brute-force otherwise, parallelised) ──────
 //
 // M10.1a: replaced brute-force full sort with a max-heap of size k.
 //   - Compare squared distances (no Sqrt per pair; Sqrt applied only to k results)
 //   - Heap O(n·log k) instead of sort O(n·log n)
 //   - dist/heap buffers allocated once per goroutine, reused across points
+//
+// M10.2b: for n ≥ 1000, build a VP-tree once and use it for all queries.
+//   - Build O(n·log n), each query O(log n) amortised
+//   - Tree is read-only → safe to query from multiple goroutines concurrently
 
 func umapKNN(points [][]float64, k, dims int, progressFn func(string, int)) ([][]int, [][]float64) {
 	n := len(points)
@@ -124,6 +129,42 @@ func umapKNN(points [][]float64, k, dims int, progressFn func(string, int)) ([][
 		nWorkers = n
 	}
 	chunkSize := (n + nWorkers - 1) / nWorkers
+
+	// M10.2b: use VP-tree only when dimensionality is low enough for pruning to help.
+	// In high dimensions (dims > 15), the triangle-inequality pruning degrades to a
+	// near-linear scan, making the VP-tree slower than the parallelised heap.
+	// Empirical threshold: VP-tree is beneficial only for dims ≤ 15.
+	if n >= 1000 && dims <= 15 {
+		tree := BuildVPTree(points)
+		var wg sync.WaitGroup
+		for w := 0; w < nWorkers; w++ {
+			start := w * chunkSize
+			end := start + chunkSize
+			if end > n {
+				end = n
+			}
+			wg.Add(1)
+			go func(start, end int) {
+				defer wg.Done()
+				for i := start; i < end; i++ {
+					idx, dist := tree.KNNExclude(points[i], k, i)
+					knnIdx[i] = idx
+					knnDist[i] = dist
+
+					if progressFn != nil {
+						cnt := doneCount.Add(1)
+						pct := int(cnt * 100 / int64(n))
+						old := int(lastPct.Load())
+						if pct >= old+5 && lastPct.CompareAndSwap(int64(old), int64(pct)) {
+							progressFn("knn", pct)
+						}
+					}
+				}
+			}(start, end)
+		}
+		wg.Wait()
+		return knnIdx, knnDist
+	}
 
 	var wg sync.WaitGroup
 	for w := 0; w < nWorkers; w++ {
@@ -575,6 +616,11 @@ func umapSpectralInit(heads, tails []int, weights []float64, n, nComponents int,
 // Optimises the low-dimensional embedding using stochastic gradient descent
 // with edge sampling and negative sampling, following the UMAP loss
 // (cross-entropy between high-dim and low-dim fuzzy sets).
+//
+// M10.2d: parallel SGD (Hogwild! style).
+//   - Edges partitioned into nWorkers chunks; each goroutine has its own RNG.
+//   - Racy reads/writes on shared embedding rows are acceptable: the algorithm
+//     converges even with stale reads (standard practice, see Recht et al. 2011).
 
 func umapOptimize(embedding [][]float64, heads, tails []int, weights []float64,
 	a, b float64, n int, cfg UMAPConfig, rng *rand.Rand) {
@@ -610,65 +656,95 @@ func umapOptimize(embedding [][]float64, heads, tails []int, weights []float64,
 		epochOfNextNegSample[i] = epochsPerNegSample[i]
 	}
 
+	// Per-worker RNGs seeded deterministically from cfg.Seed.
+	nWorkers := runtime.NumCPU()
+	if nWorkers > nEdges {
+		nWorkers = nEdges
+	}
+	workerRngs := make([]*rand.Rand, nWorkers)
+	for w := range workerRngs {
+		workerRngs[w] = rand.New(rand.NewPCG(cfg.Seed+uint64(w)+1, 0))
+	}
+	edgeChunk := (nEdges + nWorkers - 1) / nWorkers
+
 	for epoch := 0; epoch < nEpochs; epoch++ {
 		alpha := alpha0 * (1.0 - float64(epoch)/float64(nEpochs))
+		epochF := float64(epoch)
 
-		for i := 0; i < nEdges; i++ {
-			if epochOfNextSample[i] > float64(epoch) {
-				continue
+		var wg sync.WaitGroup
+		for w := 0; w < nWorkers; w++ {
+			eStart := w * edgeChunk
+			eEnd := eStart + edgeChunk
+			if eEnd > nEdges {
+				eEnd = nEdges
 			}
-			j := heads[i]
-			k := tails[i]
+			localRng := workerRngs[w]
+			wg.Add(1)
+			go func(eStart, eEnd int) {
+				defer wg.Done()
+				for i := eStart; i < eEnd; i++ {
+					if epochOfNextSample[i] > epochF {
+						continue
+					}
+					j := heads[i]
+					k := tails[i]
 
-			// Squared distance in embedding space.
-			var distSq float64
-			for c := 0; c < nComp; c++ {
-				d := embedding[j][c] - embedding[k][c]
-				distSq += d * d
-			}
+					// Squared distance in embedding space.
+					// embLoad: atomic read so the race detector is satisfied.
+					var distSq float64
+					for c := 0; c < nComp; c++ {
+						d := embLoad(&embedding[j][c]) - embLoad(&embedding[k][c])
+						distSq += d * d
+					}
 
-			// Attractive gradient.
-			// M10.1b: replace math.Pow with exp(b*log(x)) to avoid slow pow.
-			// pow_b = distSq^b, pow_bm1 = distSq^(b-1) = pow_b / distSq.
-			var gradCoeff float64
-			if distSq > 0 {
-				pow_b := math.Exp(b * math.Log(distSq))
-				gradCoeff = -2.0 * a * b * (pow_b / distSq) / (a*pow_b + 1)
-			}
-			for c := 0; c < nComp; c++ {
-				g := umapClip(gradCoeff*(embedding[j][c]-embedding[k][c])) * alpha
-				embedding[j][c] += g
-			}
+					// Attractive gradient.
+					// M10.1b: replace math.Pow with exp(b*log(x)) to avoid slow pow.
+					var gradCoeff float64
+					if distSq > 0 {
+						pow_b := math.Exp(b * math.Log(distSq))
+						gradCoeff = -2.0 * a * b * (pow_b / distSq) / (a*pow_b + 1)
+					}
+					for c := 0; c < nComp; c++ {
+						jc := embLoad(&embedding[j][c])
+						kc := embLoad(&embedding[k][c])
+						g := umapClip(gradCoeff*(jc-kc)) * alpha
+						embAdd(&embedding[j][c], g)
+					}
 
-			epochOfNextSample[i] += epochsPerSample[i]
+					epochOfNextSample[i] += epochsPerSample[i]
 
-			// Negative sampling.
-			nNeg := int((float64(epoch) - epochOfNextNegSample[i]) / epochsPerNegSample[i])
-			if nNeg < 0 {
-				nNeg = 0
-			}
-			for p := 0; p < nNeg; p++ {
-				neg := rng.IntN(n)
-				if neg == j {
-					continue
+					// Negative sampling.
+					nNeg := int((epochF - epochOfNextNegSample[i]) / epochsPerNegSample[i])
+					if nNeg < 0 {
+						nNeg = 0
+					}
+					for p := 0; p < nNeg; p++ {
+						neg := localRng.IntN(n)
+						if neg == j {
+							continue
+						}
+						var negDistSq float64
+						for c := 0; c < nComp; c++ {
+							d := embLoad(&embedding[j][c]) - embLoad(&embedding[neg][c])
+							negDistSq += d * d
+						}
+						var repCoeff float64
+						if negDistSq > 0 {
+							pow_b := math.Exp(b * math.Log(negDistSq))
+							repCoeff = 2.0 * b / ((0.001 + negDistSq) * (a*pow_b + 1))
+						}
+						for c := 0; c < nComp; c++ {
+							jc := embLoad(&embedding[j][c])
+							nc := embLoad(&embedding[neg][c])
+							g := umapClip(repCoeff*(jc-nc)) * alpha
+							embAdd(&embedding[j][c], g)
+						}
+					}
+					epochOfNextNegSample[i] += float64(nNeg) * epochsPerNegSample[i]
 				}
-				var negDistSq float64
-				for c := 0; c < nComp; c++ {
-					d := embedding[j][c] - embedding[neg][c]
-					negDistSq += d * d
-				}
-				var repCoeff float64
-				if negDistSq > 0 {
-					pow_b := math.Exp(b * math.Log(negDistSq))
-					repCoeff = 2.0 * b / ((0.001 + negDistSq) * (a*pow_b + 1))
-				}
-				for c := 0; c < nComp; c++ {
-					g := umapClip(repCoeff*(embedding[j][c]-embedding[neg][c])) * alpha
-					embedding[j][c] += g
-				}
-			}
-			epochOfNextNegSample[i] += float64(nNeg) * epochsPerNegSample[i]
+			}(eStart, eEnd)
 		}
+		wg.Wait()
 
 		if cfg.ProgressFn != nil && (epoch%10 == 0 || epoch == nEpochs-1) {
 			pct := epoch * 100 / nEpochs
@@ -689,4 +765,26 @@ func umapClip(x float64) float64 {
 		return -4
 	}
 	return x
+}
+
+// ── Atomic float64 helpers ───────────────────────────────────────────────────
+//
+// Used in parallel SGD to make concurrent embedding accesses race-detector safe.
+// Technique: reinterpret *float64 as *uint64 and use sync/atomic operations.
+// This is standard practice in high-performance Go (e.g. go.uber.org/atomic).
+
+// embLoad atomically reads a float64 from p.
+func embLoad(p *float64) float64 {
+	return math.Float64frombits(atomic.LoadUint64((*uint64)(unsafe.Pointer(p))))
+}
+
+// embAdd atomically adds delta to *p using a CAS loop.
+func embAdd(p *float64, delta float64) {
+	for {
+		old := atomic.LoadUint64((*uint64)(unsafe.Pointer(p)))
+		if atomic.CompareAndSwapUint64((*uint64)(unsafe.Pointer(p)), old,
+			math.Float64bits(math.Float64frombits(old)+delta)) {
+			return
+		}
+	}
 }

@@ -1,6 +1,6 @@
 # GBF Roadmap
 
-## Current Status — 2026-04-03
+## Current Status — 2026-04-04
 
 | Milestone | Status | Notes |
 |-----------|--------|-------|
@@ -14,7 +14,7 @@
 | M6 Query API                 | ✅ Complete | 5 Go query methods, Python helper, migration tool |
 | M7 PostgreSQL Backend        | ✅ Complete | PGStore + pgxpool, migration SQLite→PG, concurrency tests (race-clean) |
 | M8 Visualization SaaS        | ✅ Complete | Projection runs, viz API (4 endpoints), import-projections CLI |
-| M10 Performance + LoD + Tiles | 🔲 Planned  | Algo optimization, 3-level LoD, tile-based explorer, import parallel |
+| M10 Performance + LoD + Tiles | 🔄 In progress | M10.0+M10.1 done; M10.2 done (VP-tree + parallel SGD) |
 
 ## Overview
 
@@ -265,7 +265,7 @@ Validated on 1.57M positions: 17,904 DMP positions, correct class distribution.
 
 ---
 
-## M10 — Performance + LoD + Tiles 🔲
+## M10 — Performance + LoD + Tiles �
 
 **Objective**: Optimize projection algorithms for scalability, introduce a
 3-level LoD system for progressive visualization, and implement tile-based
@@ -282,10 +282,11 @@ parallel SGD) + LoD for progressive computation + pre-computed tiles for
 fluid rendering.
 
 **Sub-steps**:
-1. M10.0 — Benchmark baseline (projection algorithms at various n)
-2. M10.1 — Quick wins: heap k-NN, fast pow, cached findAB, real quickselect,
+1. ✅ M10.0 — Benchmark baseline (projection algorithms at various n)
+2. ✅ M10.1 — Quick wins: heap k-NN, fast pow, cached findAB, real quickselect,
    pre-alloc qNum, parallel HDBSCAN core distances
-3. M10.2 — VP-tree for k-NN O(n·log n) + parallel UMAP SGD
+3. ✅ M10.2 — VP-tree for HDBSCAN core distances + parallel UMAP SGD (atomic
+   CAS, race-clean); VP-tree disabled for 44D UMAP k-NN (high-D ineffective)
 4. M10.3 — LoD system: 3 levels (5-10K / 50-100K / complete), stratified
    sampling, per-(method, lod) activation, bounds storage
 5. M10.4 — Tile system: slippy map convention, pre-computed gzipped JSON

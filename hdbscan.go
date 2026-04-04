@@ -41,6 +41,7 @@ func ComputeHDBSCAN(points [][]float64, minClusterSize, minSamples int, progress
 
 	// Step 1: Compute core distances (distance to k-th nearest neighbor).
 	// M10.1f: parallelised across NumCPU goroutines (same pattern as UMAP k-NN).
+	// M10.2c: use VP-tree for n ≥ 1000; reduces O(n²) brute-force to O(n·log n).
 	coreDist := make([]float64, n)
 	{
 		nWorkers := runtime.NumCPU()
@@ -53,27 +54,54 @@ func ComputeHDBSCAN(points [][]float64, minClusterSize, minSamples int, progress
 			kth = n - 1
 		}
 		var wg sync.WaitGroup
-		for w := 0; w < nWorkers; w++ {
-			start := w * chunkSize
-			end := start + chunkSize
-			if end > n {
-				end = n
-			}
-			wg.Add(1)
-			go func(start, end int) {
-				defer wg.Done()
-				dists := make([]float64, n)
-				for i := start; i < end; i++ {
-					for j := 0; j < n; j++ {
-						if i == j {
-							dists[j] = math.MaxFloat64
-						} else {
-							dists[j] = eucDist(points[i], points[j])
+
+		if n >= 1000 {
+			// VP-tree path: build once, query in parallel.
+			tree := BuildVPTree(points)
+			for w := 0; w < nWorkers; w++ {
+				start := w * chunkSize
+				end := start + chunkSize
+				if end > n {
+					end = n
+				}
+				wg.Add(1)
+				go func(start, end int) {
+					defer wg.Done()
+					for i := start; i < end; i++ {
+						// Request kth+1 neighbours; VP-tree excludes self via excludeIdx.
+						_, dists := tree.KNNExclude(points[i], kth+1, i)
+						if len(dists) > kth {
+							coreDist[i] = dists[kth]
+						} else if len(dists) > 0 {
+							coreDist[i] = dists[len(dists)-1]
 						}
 					}
-					coreDist[i] = quickSelect(dists, kth)
+				}(start, end)
+			}
+		} else {
+			// Brute-force path for small n.
+			for w := 0; w < nWorkers; w++ {
+				start := w * chunkSize
+				end := start + chunkSize
+				if end > n {
+					end = n
 				}
-			}(start, end)
+				wg.Add(1)
+				go func(start, end int) {
+					defer wg.Done()
+					dists := make([]float64, n)
+					for i := start; i < end; i++ {
+						for j := 0; j < n; j++ {
+							if i == j {
+								dists[j] = math.MaxFloat64
+							} else {
+								dists[j] = eucDist(points[i], points[j])
+							}
+						}
+						coreDist[i] = quickSelect(dists, kth)
+					}
+				}(start, end)
+			}
 		}
 		wg.Wait()
 		reportProgress("hdbscan_core_dist", 100)
