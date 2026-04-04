@@ -1,4 +1,7 @@
 <script>
+  import { onMount } from 'svelte';
+  import { fetchConfig } from './lib/api.js';
+  import Setup from './views/Setup.svelte';
   import Dashboard from './views/Dashboard.svelte';
   import Projection from './views/Projection.svelte';
   import Explorer from './views/Explorer.svelte';
@@ -6,6 +9,7 @@
   import Help from './views/Help.svelte';
 
   const views = [
+    { id: 'setup', label: 'Setup', icon: '⚙️' },
     { id: 'dashboard', label: 'Dashboard', icon: '📊' },
     { id: 'projection', label: 'Projections', icon: '🗺️' },
     { id: 'explorer', label: 'Explorer', icon: '📈' },
@@ -13,7 +17,19 @@
     { id: 'help', label: 'Help', icon: '❓' },
   ];
 
-  let currentView = $state('dashboard');
+  let currentView = $state('setup');
+  let hasDB = $state(false);
+
+  onMount(async () => {
+    try {
+      const config = await fetchConfig();
+      hasDB = config.has_db;
+      // If DB is already configured, go to dashboard.
+      if (hasDB) currentView = 'dashboard';
+    } catch (e) {
+      // Stay on setup.
+    }
+  });
 </script>
 
 <div class="app-layout">
@@ -33,7 +49,9 @@
   </aside>
 
   <main class="main">
-    {#if currentView === 'dashboard'}
+    {#if currentView === 'setup'}
+      <Setup />
+    {:else if currentView === 'dashboard'}
       <Dashboard />
     {:else if currentView === 'projection'}
       <Projection />

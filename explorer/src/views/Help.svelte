@@ -4,19 +4,35 @@
 <div class="help-content">
   <h2>GBF Explorer — Documentation</h2>
   <p>
-    Minimal data exploration tool for the GBF (Gammon Binary Format) database.
+    Standalone data exploration tool for the GBF (Gammon Binary Format) database.
     Explore backgammon position data through interactive visualizations.
+    Everything runs from a single executable — no installation required.
   </p>
 
   <h2>Getting Started</h2>
   <ol>
-    <li>Start the server: <code>go run ./cmd/explorer -db bmab.db -bmab data/bmab-2025-06-23</code></li>
-    <li>Open <code>http://localhost:8080</code> in your browser</li>
-    <li>Import data from the <strong>Import</strong> tab (or use existing database)</li>
+    <li>Double-click <code>gbf-explorer</code> — the browser opens automatically</li>
+    <li>Go to the <strong>Setup</strong> tab to create a database and set the BMAB directory</li>
+    <li>Import data from the <strong>Import</strong> tab</li>
+    <li>Compute projections from the <strong>Import</strong> tab (PCA + k-means)</li>
     <li>Explore projections and features from the corresponding tabs</li>
   </ol>
 
+  <h2>Command-line Options (optional)</h2>
+  <p>All options can also be configured from the Setup tab in the UI.</p>
+  <pre><code>gbf-explorer                                # default: auto-open browser
+gbf-explorer -db bmab.db                    # open existing database
+gbf-explorer -db bmab.db -bmab ./bmab-data  # set BMAB dir
+gbf-explorer -addr :8080                    # use specific port
+gbf-explorer -no-browser                    # don't auto-open browser</code></pre>
+
   <h2>Views</h2>
+
+  <h3>⚙️ Setup</h3>
+  <p>
+    Configure the database path and BMAB data directory.
+    Create new databases or open existing ones. Browse the filesystem to find directories.
+  </p>
 
   <h3>📊 Dashboard</h3>
   <p>
@@ -28,15 +44,14 @@
 
   <h3>🗺️ Projections</h3>
   <p>
-    Interactive 2D scatter plot of projection data (UMAP, PCA).
-    Computed offline and imported via <code>import-projections</code>.
+    Interactive 2D scatter plot of projection data (PCA).
   </p>
   <ul>
-    <li><strong>Method</strong>: select the projection method (umap_2d, pca_2d, …)</li>
+    <li><strong>Method</strong>: select the projection method (pca_2d)</li>
     <li><strong>Color by</strong>: cluster ID, position class, away scores</li>
     <li><strong>Points</strong>: limit the number of displayed points</li>
     <li><strong>Cluster / Class filter</strong>: restrict to specific subsets</li>
-    <li><strong>Click</strong> on a point to see the full position detail (board, cube, pip counts)</li>
+    <li><strong>Click</strong> on a point to see the full position detail</li>
     <li><strong>Scroll</strong> to zoom, drag to pan</li>
   </ul>
 
@@ -54,14 +69,13 @@
 
   <h3>📥 Import</h3>
   <p>
-    Progressive import of XG files from the BMAB dataset directory.
-    Requires <code>-bmab</code> flag when starting the server.
+    Progressive import of XG files from the BMAB dataset directory +
+    projection computation (PCA + k-means).
   </p>
   <ul>
-    <li><strong>Proportion</strong>: percentage of BMAB files to import (e.g. 1% = ~330 files)</li>
-    <li><strong>Batch size</strong>: files per transaction (100 is usually optimal)</li>
-    <li>Progress is streamed in real-time via Server-Sent Events</li>
-    <li>Shows rate (positions/second), elapsed and estimated remaining time</li>
+    <li><strong>Import</strong>: select proportion of BMAB files and batch size</li>
+    <li><strong>Compute Projections</strong>: run PCA + k-means clustering directly (no Python needed)</li>
+    <li>Progress is streamed in real-time</li>
   </ul>
 
   <h2>Features (44 dimensions)</h2>
@@ -86,57 +100,13 @@
     <li><strong>pos_class</strong>: 0=contact, 1=race, 2=bearoff</li>
   </ul>
 
-  <h2>Projection Pipeline</h2>
-  <p>
-    Projections are computed offline (Python) and imported into the database.
-  </p>
-  <pre><code># 1. Export features
-go run ./cmd/export-features -db bmab.db -out features.npy -ids ids.npy
+  <h2>Building from Source</h2>
+  <pre><code># Build for current platform
+make build
 
-# 2. Compute UMAP projections
-python python/compute_projections.py \
-  --features features.npy --ids ids.npy \
-  --method umap_2d --output projections.csv
+# Build for all platforms (Linux + Windows)
+make all
 
-# 3. Import into database
-go run ./cmd/import-projections -db bmab.db -method umap_2d \
-  -version v1.0 -params '{{"n_neighbors":15,"min_dist":0.1}}' \
-  projections.csv</code></pre>
-
-  <h2>Server Flags</h2>
-  <table>
-    <thead><tr><th>Flag</th><th>Default</th><th>Description</th></tr></thead>
-    <tbody>
-      <tr><td><code>-db</code></td><td>bmab.db</td><td>Path to SQLite database</td></tr>
-      <tr><td><code>-bmab</code></td><td>(none)</td><td>BMAB dataset directory (enables Import tab)</td></tr>
-      <tr><td><code>-addr</code></td><td>:8080</td><td>Listen address</td></tr>
-      <tr><td><code>-static</code></td><td>explorer/dist</td><td>Frontend static files directory</td></tr>
-    </tbody>
-  </table>
-
-  <h2>API Endpoints</h2>
-  <table>
-    <thead><tr><th>Method</th><th>Path</th><th>Description</th></tr></thead>
-    <tbody>
-      <tr><td>GET</td><td><code>/api/stats</code></td><td>Database statistics and distributions</td></tr>
-      <tr><td>GET</td><td><code>/api/features/names</code></td><td>List of 44 feature names</td></tr>
-      <tr><td>GET</td><td><code>/api/features/sample?n=5000</code></td><td>Random sample with all features</td></tr>
-      <tr><td>GET</td><td><code>/api/viz/projection</code></td><td>Projection data points</td></tr>
-      <tr><td>GET</td><td><code>/api/viz/clusters</code></td><td>Cluster summaries</td></tr>
-      <tr><td>GET</td><td><code>/api/viz/position/&#123;id&#125;</code></td><td>Full position detail</td></tr>
-      <tr><td>GET</td><td><code>/api/viz/runs</code></td><td>Active projection runs</td></tr>
-      <tr><td>POST</td><td><code>/api/import/start</code></td><td>Start BMAB import</td></tr>
-      <tr><td>GET</td><td><code>/api/import/progress</code></td><td>Import progress (SSE stream)</td></tr>
-    </tbody>
-  </table>
-
-  <h2>Key Findings (from M5)</h2>
-  <ul>
-    <li><strong>85.9%</strong> of positions are contact, 7.4% race, 6.7% bearoff</li>
-    <li>Contact positions are 4× harder than race (mean equity loss)</li>
-    <li>UMAP with n_neighbors=15, min_dist=0.1 produces best separation</li>
-    <li>HDBSCAN finds 6 natural clusters (3.4% noise)</li>
-    <li>PCA PC1 (19%) = pip counts, PC3 (6%) = pip_diff</li>
-    <li>8 PCA components capture 50% of variance</li>
-  </ul>
+# The result is a single executable in bin/
+ls -la bin/gbf-explorer*</code></pre>
 </div>

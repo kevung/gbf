@@ -2,6 +2,9 @@ tmp
 data/gbf_m5.db
 data/gbf_m5.db-shm
 data/gbf_m5.db-wal
+data/*.db
+data/*.db-shm
+data/*.db-wal
 /export-features
 /bin/
 explorer/node_modules/

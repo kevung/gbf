@@ -689,3 +689,48 @@ func (s *SQLiteStore) QueryClusterSummary(ctx context.Context, method string) ([
 	}
 	return out, rows.Err()
 }
+
+// ExportAllFeatures extracts position IDs and feature vectors from the store.
+// If sampleSize > 0 and less than total positions, a deterministic subsample is used.
+func (s *SQLiteStore) ExportAllFeatures(ctx context.Context, sampleSize int, seed uint64) ([]int64, [][]float64, error) {
+	var total int64
+	if err := s.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM positions").Scan(&total); err != nil {
+		return nil, nil, fmt.Errorf("count positions: %w", err)
+	}
+	if total == 0 {
+		return nil, nil, nil
+	}
+
+	query := "SELECT id, base_record FROM positions"
+	if sampleSize > 0 && int64(sampleSize) < total {
+		// Deterministic sampling using modulo on rowid.
+		step := int(total) / sampleSize
+		if step < 1 {
+			step = 1
+		}
+		query = fmt.Sprintf("SELECT id, base_record FROM positions WHERE ROWID %% %d = 0 LIMIT %d", step, sampleSize)
+	}
+
+	rows, err := s.db.QueryContext(ctx, query)
+	if err != nil {
+		return nil, nil, fmt.Errorf("query positions: %w", err)
+	}
+	defer rows.Close()
+
+	var ids []int64
+	var features [][]float64
+	for rows.Next() {
+		var id int64
+		var blob []byte
+		if err := rows.Scan(&id, &blob); err != nil {
+			continue
+		}
+		rec, err := gbf.UnmarshalBaseRecord(blob)
+		if err != nil {
+			continue
+		}
+		ids = append(ids, id)
+		features = append(features, gbf.ExtractAllFeatures(*rec))
+	}
+	return ids, features, rows.Err()
+}

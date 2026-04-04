@@ -1,0 +1,523 @@
+package gbf
+
+import (
+	"context"
+	"fmt"
+	"math"
+	"math/rand/v2"
+	"sort"
+	"time"
+)
+
+// ── PCA (pure Go) ────────────────────────────────────────────────────────────
+
+// PCAResult holds the result of a PCA projection.
+type PCAResult struct {
+	Embedding [][]float64 // N × nComponents
+	Variance  []float64   // explained variance per component
+}
+
+// ComputePCA runs PCA on the feature matrix and returns nComponents dimensions.
+// features is N × D (row-major). Data is centered and scaled in place.
+func ComputePCA(features [][]float64, nComponents int) (*PCAResult, error) {
+	n := len(features)
+	if n == 0 {
+		return nil, fmt.Errorf("empty feature matrix")
+	}
+	d := len(features[0])
+	if nComponents > d {
+		nComponents = d
+	}
+
+	// Center and scale (standard scaling).
+	mean := make([]float64, d)
+	std := make([]float64, d)
+	for j := 0; j < d; j++ {
+		var s float64
+		for i := 0; i < n; i++ {
+			s += features[i][j]
+		}
+		mean[j] = s / float64(n)
+	}
+	for j := 0; j < d; j++ {
+		var s float64
+		for i := 0; i < n; i++ {
+			diff := features[i][j] - mean[j]
+			s += diff * diff
+		}
+		std[j] = math.Sqrt(s / float64(n))
+		if std[j] < 1e-12 {
+			std[j] = 1
+		}
+	}
+	for i := 0; i < n; i++ {
+		for j := 0; j < d; j++ {
+			features[i][j] = (features[i][j] - mean[j]) / std[j]
+		}
+	}
+
+	// Compute covariance matrix (D × D).
+	cov := make([][]float64, d)
+	for i := range cov {
+		cov[i] = make([]float64, d)
+	}
+	for i := 0; i < d; i++ {
+		for j := i; j < d; j++ {
+			var s float64
+			for k := 0; k < n; k++ {
+				s += features[k][i] * features[k][j]
+			}
+			cov[i][j] = s / float64(n-1)
+			cov[j][i] = cov[i][j]
+		}
+	}
+
+	// Power iteration to extract top nComponents eigenvectors.
+	eigenvectors := make([][]float64, nComponents)
+	eigenvalues := make([]float64, nComponents)
+
+	for comp := 0; comp < nComponents; comp++ {
+		v := make([]float64, d)
+		rng := rand.New(rand.NewPCG(42, uint64(comp)))
+		for j := range v {
+			v[j] = rng.Float64() - 0.5
+		}
+		normalize(v)
+
+		for iter := 0; iter < 300; iter++ {
+			// w = cov * v
+			w := make([]float64, d)
+			for i := 0; i < d; i++ {
+				var s float64
+				for j := 0; j < d; j++ {
+					s += cov[i][j] * v[j]
+				}
+				w[i] = s
+			}
+
+			// Deflate: remove components from previous eigenvectors.
+			for prev := 0; prev < comp; prev++ {
+				dot := dotProduct(w, eigenvectors[prev])
+				for j := range w {
+					w[j] -= dot * eigenvectors[prev][j]
+				}
+			}
+
+			normalize(w)
+
+			// Check convergence.
+			diff := 0.0
+			for j := range v {
+				diff += (w[j] - v[j]) * (w[j] - v[j])
+			}
+			v = w
+			if diff < 1e-12 {
+				break
+			}
+		}
+
+		eigenvectors[comp] = v
+		// eigenvalue = v^T * cov * v
+		w := make([]float64, d)
+		for i := 0; i < d; i++ {
+			var s float64
+			for j := 0; j < d; j++ {
+				s += cov[i][j] * v[j]
+			}
+			w[i] = s
+		}
+		eigenvalues[comp] = dotProduct(v, w)
+	}
+
+	// Project: embedding[i] = features[i] * eigenvectors^T
+	embedding := make([][]float64, n)
+	for i := 0; i < n; i++ {
+		row := make([]float64, nComponents)
+		for c := 0; c < nComponents; c++ {
+			var s float64
+			for j := 0; j < d; j++ {
+				s += features[i][j] * eigenvectors[c][j]
+			}
+			row[c] = s
+		}
+		embedding[i] = row
+	}
+
+	return &PCAResult{Embedding: embedding, Variance: eigenvalues}, nil
+}
+
+// ── K-Means (pure Go) ───────────────────────────────────────────────────────
+
+// KMeansResult holds the result of k-means clustering.
+type KMeansResult struct {
+	Labels    []int       // cluster assignment per point (-1 for noise)
+	Centroids [][]float64 // k × nDims
+	Inertia   float64     // total within-cluster sum of squares
+}
+
+// ComputeKMeans runs k-means++ on the given points (N × D).
+func ComputeKMeans(points [][]float64, k, maxIter int, seed uint64) (*KMeansResult, error) {
+	n := len(points)
+	if n == 0 {
+		return nil, fmt.Errorf("empty points")
+	}
+	if k <= 0 || k > n {
+		return nil, fmt.Errorf("invalid k=%d for n=%d", k, n)
+	}
+	d := len(points[0])
+
+	rng := rand.New(rand.NewPCG(seed, 0))
+
+	// k-means++ initialization.
+	centroids := make([][]float64, k)
+	centroids[0] = copySlice(points[rng.IntN(n)])
+
+	dist := make([]float64, n)
+	for c := 1; c < k; c++ {
+		totalDist := 0.0
+		for i := 0; i < n; i++ {
+			minD := math.MaxFloat64
+			for cc := 0; cc < c; cc++ {
+				dd := sqDist(points[i], centroids[cc])
+				if dd < minD {
+					minD = dd
+				}
+			}
+			dist[i] = minD
+			totalDist += minD
+		}
+		// Weighted random selection.
+		target := rng.Float64() * totalDist
+		cum := 0.0
+		chosen := 0
+		for i := 0; i < n; i++ {
+			cum += dist[i]
+			if cum >= target {
+				chosen = i
+				break
+			}
+		}
+		centroids[c] = copySlice(points[chosen])
+	}
+
+	labels := make([]int, n)
+	if maxIter <= 0 {
+		maxIter = 100
+	}
+
+	for iter := 0; iter < maxIter; iter++ {
+		// Assignment.
+		changed := false
+		for i := 0; i < n; i++ {
+			bestC := 0
+			bestD := sqDist(points[i], centroids[0])
+			for c := 1; c < k; c++ {
+				dd := sqDist(points[i], centroids[c])
+				if dd < bestD {
+					bestD = dd
+					bestC = c
+				}
+			}
+			if labels[i] != bestC {
+				labels[i] = bestC
+				changed = true
+			}
+		}
+
+		if !changed {
+			break
+		}
+
+		// Update centroids.
+		for c := 0; c < k; c++ {
+			newC := make([]float64, d)
+			count := 0
+			for i := 0; i < n; i++ {
+				if labels[i] == c {
+					for j := 0; j < d; j++ {
+						newC[j] += points[i][j]
+					}
+					count++
+				}
+			}
+			if count > 0 {
+				for j := 0; j < d; j++ {
+					newC[j] /= float64(count)
+				}
+				centroids[c] = newC
+			}
+		}
+	}
+
+	// Compute inertia.
+	inertia := 0.0
+	for i := 0; i < n; i++ {
+		inertia += sqDist(points[i], centroids[labels[i]])
+	}
+
+	return &KMeansResult{
+		Labels:    labels,
+		Centroids: centroids,
+		Inertia:   inertia,
+	}, nil
+}
+
+// ── Projection Pipeline ─────────────────────────────────────────────────────
+
+// ProjectionConfig configures a projection computation.
+type ProjectionConfig struct {
+	Method         string // "pca_2d" or "kmeans" (used for labeling)
+	K              int    // number of clusters for k-means (default: 8)
+	SampleSize     int    // subsample if > 0 and < total positions
+	Seed           uint64
+	FeatureVersion string
+	ProgressFn     func(stage string, pct int) // optional progress callback
+}
+
+// ProjectionComputeResult holds the computed projection + clustering.
+type ProjectionComputeResult struct {
+	Points  []ProjectionPoint
+	Method  string
+	Params  string
+	NPoints int
+}
+
+// ComputeProjectionFromStore extracts features from the store, computes
+// PCA + k-means, and returns projection points ready for insertion.
+func ComputeProjectionFromStore(ctx context.Context, store Store, cfg ProjectionConfig) (*ProjectionComputeResult, error) {
+	progress := func(stage string, pct int) {
+		if cfg.ProgressFn != nil {
+			cfg.ProgressFn(stage, pct)
+		}
+	}
+
+	if cfg.K <= 0 {
+		cfg.K = 8
+	}
+	if cfg.Seed == 0 {
+		cfg.Seed = 42
+	}
+	if cfg.FeatureVersion == "" {
+		cfg.FeatureVersion = "v1.0"
+	}
+
+	progress("extracting", 0)
+
+	var ids []int64
+	var features [][]float64
+
+	// Try to get DB handle for direct queries.
+	if accessor, ok := store.(interface {
+		ExportAllFeatures(ctx context.Context, sampleSize int, seed uint64) ([]int64, [][]float64, error)
+	}); ok {
+		var err error
+		ids, features, err = accessor.ExportAllFeatures(ctx, cfg.SampleSize, cfg.Seed)
+		if err != nil {
+			return nil, fmt.Errorf("export features: %w", err)
+		}
+	} else {
+		return nil, fmt.Errorf("store does not support ExportAllFeatures")
+	}
+
+	if len(ids) == 0 {
+		return nil, fmt.Errorf("no positions found")
+	}
+
+	progress("extracting", 100)
+	progress("computing_pca", 0)
+
+	// Make a copy for PCA (it modifies in place).
+	featuresCopy := make([][]float64, len(features))
+	for i, f := range features {
+		featuresCopy[i] = copySlice(f)
+	}
+
+	pca, err := ComputePCA(featuresCopy, 2)
+	if err != nil {
+		return nil, fmt.Errorf("PCA: %w", err)
+	}
+
+	progress("computing_pca", 100)
+	progress("computing_kmeans", 0)
+
+	kmeans, err := ComputeKMeans(pca.Embedding, cfg.K, 100, cfg.Seed)
+	if err != nil {
+		return nil, fmt.Errorf("k-means: %w", err)
+	}
+
+	progress("computing_kmeans", 100)
+	progress("saving", 0)
+
+	// Build projection points.
+	points := make([]ProjectionPoint, len(ids))
+	for i, id := range ids {
+		x := float32(pca.Embedding[i][0])
+		y := float32(pca.Embedding[i][1])
+		cid := kmeans.Labels[i]
+		points[i] = ProjectionPoint{
+			PositionID: id,
+			X:          x,
+			Y:          y,
+			ClusterID:  &cid,
+		}
+	}
+
+	return &ProjectionComputeResult{
+		Points:  points,
+		Method:  "pca_2d",
+		Params:  fmt.Sprintf(`{"k":%d,"n":%d,"variance":[%.4f,%.4f]}`, cfg.K, len(ids), pca.Variance[0], pca.Variance[1]),
+		NPoints: len(ids),
+	}, nil
+}
+
+// SaveProjectionResult saves the computed projection into the store.
+func SaveProjectionResult(ctx context.Context, store Store, result *ProjectionComputeResult, featureVersion string) error {
+	if featureVersion == "" {
+		featureVersion = "v1.0"
+	}
+
+	run := ProjectionRun{
+		Method:         result.Method,
+		FeatureVersion: featureVersion,
+		Params:         result.Params,
+		NPoints:        result.NPoints,
+		CreatedAt:      time.Now().UTC().Format(time.RFC3339),
+	}
+
+	runID, err := store.CreateProjectionRun(ctx, run)
+	if err != nil {
+		return fmt.Errorf("create run: %w", err)
+	}
+
+	// Insert in batches of 5000.
+	batch := 5000
+	for i := 0; i < len(result.Points); i += batch {
+		end := i + batch
+		if end > len(result.Points) {
+			end = len(result.Points)
+		}
+		if err := store.InsertProjectionBatch(ctx, runID, result.Points[i:end]); err != nil {
+			return fmt.Errorf("insert batch at %d: %w", i, err)
+		}
+	}
+
+	if err := store.ActivateProjectionRun(ctx, runID); err != nil {
+		return fmt.Errorf("activate run: %w", err)
+	}
+
+	return nil
+}
+
+// ── Helpers ──────────────────────────────────────────────────────────────────
+
+func dotProduct(a, b []float64) float64 {
+	var s float64
+	for i := range a {
+		s += a[i] * b[i]
+	}
+	return s
+}
+
+func normalize(v []float64) {
+	norm := math.Sqrt(dotProduct(v, v))
+	if norm < 1e-12 {
+		return
+	}
+	for i := range v {
+		v[i] /= norm
+	}
+}
+
+func sqDist(a, b []float64) float64 {
+	var s float64
+	for i := range a {
+		d := a[i] - b[i]
+		s += d * d
+	}
+	return s
+}
+
+func copySlice(s []float64) []float64 {
+	c := make([]float64, len(s))
+	copy(c, s)
+	return c
+}
+
+// SilhouetteScore computes a simplified silhouette score for the clustering.
+// Uses a random sample for efficiency when n > maxSample.
+func SilhouetteScore(points [][]float64, labels []int, maxSample int) float64 {
+	n := len(points)
+	if n < 2 {
+		return 0
+	}
+
+	// Find unique clusters.
+	clusterSet := map[int]bool{}
+	for _, l := range labels {
+		clusterSet[l] = true
+	}
+	if len(clusterSet) < 2 {
+		return 0
+	}
+
+	// Sample indices if too many.
+	indices := make([]int, n)
+	for i := range indices {
+		indices[i] = i
+	}
+	if maxSample > 0 && n > maxSample {
+		rng := rand.New(rand.NewPCG(42, 0))
+		rng.Shuffle(n, func(i, j int) { indices[i], indices[j] = indices[j], indices[i] })
+		indices = indices[:maxSample]
+		sort.Ints(indices)
+	}
+
+	// Group points by cluster.
+	clusters := map[int][]int{}
+	for i, l := range labels {
+		clusters[l] = append(clusters[l], i)
+	}
+
+	totalScore := 0.0
+	for _, idx := range indices {
+		myCluster := labels[idx]
+		members := clusters[myCluster]
+
+		// a(i) = avg distance to same cluster.
+		a := 0.0
+		for _, j := range members {
+			if j != idx {
+				a += math.Sqrt(sqDist(points[idx], points[j]))
+			}
+		}
+		if len(members) > 1 {
+			a /= float64(len(members) - 1)
+		}
+
+		// b(i) = min avg distance to other clusters.
+		b := math.MaxFloat64
+		for cl, others := range clusters {
+			if cl == myCluster {
+				continue
+			}
+			avg := 0.0
+			for _, j := range others {
+				avg += math.Sqrt(sqDist(points[idx], points[j]))
+			}
+			avg /= float64(len(others))
+			if avg < b {
+				b = avg
+			}
+		}
+
+		s := 0.0
+		if a < b {
+			s = 1 - a/b
+		} else if a > b {
+			s = b/a - 1
+		}
+		totalScore += s
+	}
+
+	return totalScore / float64(len(indices))
+}
