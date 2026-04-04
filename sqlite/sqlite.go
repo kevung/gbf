@@ -516,6 +516,56 @@ func (s *SQLiteStore) PositionByID(ctx context.Context, id int64) (*gbf.Position
 	return &pwa[0], nil
 }
 
+// PositionOccurrences returns how many times a position appears in the moves
+// table. exactCount is the count for this exact position_id.
+// boardCount is the count for all positions sharing the same board_hash.
+func (s *SQLiteStore) PositionOccurrences(ctx context.Context, posID int64, boardHash uint64) (exactCount, boardCount int, err error) {
+	err = s.conn().QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM moves WHERE position_id = ?`, posID,
+	).Scan(&exactCount)
+	if err != nil {
+		return 0, 0, fmt.Errorf("exact count: %w", err)
+	}
+	err = s.conn().QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM moves m
+		 JOIN positions p ON m.position_id = p.id
+		 WHERE p.board_hash = ?`, int64(boardHash),
+	).Scan(&boardCount)
+	if err != nil {
+		return 0, 0, fmt.Errorf("board count: %w", err)
+	}
+	return
+}
+
+// PositionMatchMetadata returns the matches where this position appeared.
+func (s *SQLiteStore) PositionMatchMetadata(ctx context.Context, posID int64, limit int) ([]gbf.MatchMetadataRow, error) {
+	if limit <= 0 {
+		limit = 20
+	}
+	rows, err := s.conn().QueryContext(ctx, `
+		SELECT DISTINCT ma.id, COALESCE(ma.player1,''), COALESCE(ma.player2,''),
+		       COALESCE(ma.match_length,0), COALESCE(ma.event,''), COALESCE(ma.date,'')
+		FROM moves m
+		JOIN games g ON m.game_id = g.id
+		JOIN matches ma ON g.match_id = ma.id
+		WHERE m.position_id = ?
+		LIMIT ?`, posID, limit)
+	if err != nil {
+		return nil, fmt.Errorf("position match metadata: %w", err)
+	}
+	defer rows.Close()
+
+	var out []gbf.MatchMetadataRow
+	for rows.Next() {
+		var r gbf.MatchMetadataRow
+		if err := rows.Scan(&r.MatchID, &r.Player1, &r.Player2, &r.MatchLength, &r.Event, &r.Date); err != nil {
+			return nil, fmt.Errorf("scan match metadata: %w", err)
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
 // CreateProjectionRun inserts a projection run and returns its ID.
 func (s *SQLiteStore) CreateProjectionRun(ctx context.Context, run gbf.ProjectionRun) (int64, error) {
 	res, err := s.conn().ExecContext(ctx, `

@@ -266,12 +266,24 @@ func ComputeKMeans(points [][]float64, k, maxIter int, seed uint64) (*KMeansResu
 
 // ProjectionConfig configures a projection computation.
 type ProjectionConfig struct {
-	Method         string // "pca_2d" or "kmeans" (used for labeling)
-	K              int    // number of clusters for k-means (default: 8)
+	Method         string // "pca_2d", "tsne_2d"
+	K              int    // number of clusters for k-means (default: 8; 0 = use HDBSCAN)
 	SampleSize     int    // subsample if > 0 and < total positions
 	Seed           uint64
 	FeatureVersion string
 	ProgressFn     func(stage string, pct int) // optional progress callback
+
+	// t-SNE specific.
+	Perplexity float64 // t-SNE perplexity (default 30)
+	TSNEIter   int     // t-SNE iterations (default 1000)
+
+	// Clustering.
+	ClusterMethod    string // "kmeans" (default) or "hdbscan"
+	HDBSCANMinSize   int    // HDBSCAN min_cluster_size (default 100)
+	HDBSCANMinSample int    // HDBSCAN min_samples (default 50)
+
+	// Feature selection: indices of features to use (0-43). Nil = all 44.
+	FeatureIndices []int
 }
 
 // ProjectionComputeResult holds the computed projection + clustering.
@@ -283,7 +295,7 @@ type ProjectionComputeResult struct {
 }
 
 // ComputeProjectionFromStore extracts features from the store, computes
-// PCA + k-means, and returns projection points ready for insertion.
+// PCA/t-SNE + k-means/HDBSCAN, and returns projection points ready for insertion.
 func ComputeProjectionFromStore(ctx context.Context, store Store, cfg ProjectionConfig) (*ProjectionComputeResult, error) {
 	progress := func(stage string, pct int) {
 		if cfg.ProgressFn != nil {
@@ -291,14 +303,21 @@ func ComputeProjectionFromStore(ctx context.Context, store Store, cfg Projection
 		}
 	}
 
-	if cfg.K <= 0 {
-		cfg.K = 8
+	if cfg.K < 0 {
+		cfg.K = 0
 	}
 	if cfg.Seed == 0 {
 		cfg.Seed = 42
 	}
 	if cfg.FeatureVersion == "" {
 		cfg.FeatureVersion = "v1.0"
+	}
+	if cfg.ClusterMethod == "" {
+		if cfg.K > 0 {
+			cfg.ClusterMethod = "kmeans"
+		} else {
+			cfg.ClusterMethod = "hdbscan"
+		}
 	}
 
 	progress("extracting", 0)
@@ -323,49 +342,138 @@ func ComputeProjectionFromStore(ctx context.Context, store Store, cfg Projection
 		return nil, fmt.Errorf("no positions found")
 	}
 
+	// Apply feature selection if specified.
+	if len(cfg.FeatureIndices) > 0 {
+		for i, f := range features {
+			selected := make([]float64, len(cfg.FeatureIndices))
+			for j, idx := range cfg.FeatureIndices {
+				if idx >= 0 && idx < len(f) {
+					selected[j] = f[idx]
+				}
+			}
+			features[i] = selected
+		}
+	}
+
 	progress("extracting", 100)
-	progress("computing_pca", 0)
 
-	// Make a copy for PCA (it modifies in place).
-	featuresCopy := make([][]float64, len(features))
-	for i, f := range features {
-		featuresCopy[i] = copySlice(f)
+	// ── Dimensionality Reduction ─────────────────────────────────────────
+	var embedding [][]float64
+	var varianceInfo string
+
+	switch cfg.Method {
+	case "tsne_2d":
+		progress("computing_tsne", 0)
+		featuresCopy := make([][]float64, len(features))
+		for i, f := range features {
+			featuresCopy[i] = copySlice(f)
+		}
+		// Standard scale first.
+		standardScale(featuresCopy)
+
+		perplexity := cfg.Perplexity
+		if perplexity <= 0 {
+			perplexity = 30
+		}
+		tsneIter := cfg.TSNEIter
+		if tsneIter <= 0 {
+			tsneIter = 1000
+		}
+		result, err := ComputeTSNE(featuresCopy, 2, perplexity, tsneIter, cfg.Seed,
+			func(iter, maxIter int) {
+				progress("computing_tsne", iter*100/maxIter)
+			})
+		if err != nil {
+			return nil, fmt.Errorf("t-SNE: %w", err)
+		}
+		embedding = result.Embedding
+		varianceInfo = fmt.Sprintf(`"perplexity":%.0f,"iterations":%d`, perplexity, tsneIter)
+		progress("computing_tsne", 100)
+
+	default: // "pca_2d"
+		progress("computing_pca", 0)
+		featuresCopy := make([][]float64, len(features))
+		for i, f := range features {
+			featuresCopy[i] = copySlice(f)
+		}
+		pca, err := ComputePCA(featuresCopy, 2)
+		if err != nil {
+			return nil, fmt.Errorf("PCA: %w", err)
+		}
+		embedding = pca.Embedding
+		varianceInfo = fmt.Sprintf(`"variance":[%.4f,%.4f]`, pca.Variance[0], pca.Variance[1])
+		progress("computing_pca", 100)
 	}
 
-	pca, err := ComputePCA(featuresCopy, 2)
-	if err != nil {
-		return nil, fmt.Errorf("PCA: %w", err)
+	// ── Clustering ───────────────────────────────────────────────────────
+	var clusterLabels []int
+	var clusterInfo string
+
+	switch cfg.ClusterMethod {
+	case "hdbscan":
+		progress("computing_hdbscan", 0)
+		minSize := cfg.HDBSCANMinSize
+		if minSize <= 0 {
+			minSize = 100
+		}
+		minSample := cfg.HDBSCANMinSample
+		if minSample <= 0 {
+			minSample = 50
+		}
+		result, err := ComputeHDBSCAN(embedding, minSize, minSample,
+			func(stage string, pct int) {
+				progress(stage, pct)
+			})
+		if err != nil {
+			return nil, fmt.Errorf("HDBSCAN: %w", err)
+		}
+		clusterLabels = result.Labels
+		clusterInfo = fmt.Sprintf(`"cluster_method":"hdbscan","n_clusters":%d,"n_noise":%d,"min_cluster_size":%d`,
+			result.NClusters, result.NNoise, minSize)
+		progress("computing_hdbscan", 100)
+
+	default: // "kmeans"
+		if cfg.K <= 0 {
+			cfg.K = 8
+		}
+		progress("computing_kmeans", 0)
+		kmeans, err := ComputeKMeans(embedding, cfg.K, 100, cfg.Seed)
+		if err != nil {
+			return nil, fmt.Errorf("k-means: %w", err)
+		}
+		clusterLabels = kmeans.Labels
+		clusterInfo = fmt.Sprintf(`"cluster_method":"kmeans","k":%d`, cfg.K)
+		progress("computing_kmeans", 100)
 	}
 
-	progress("computing_pca", 100)
-	progress("computing_kmeans", 0)
-
-	kmeans, err := ComputeKMeans(pca.Embedding, cfg.K, 100, cfg.Seed)
-	if err != nil {
-		return nil, fmt.Errorf("k-means: %w", err)
-	}
-
-	progress("computing_kmeans", 100)
 	progress("saving", 0)
 
 	// Build projection points.
 	points := make([]ProjectionPoint, len(ids))
 	for i, id := range ids {
-		x := float32(pca.Embedding[i][0])
-		y := float32(pca.Embedding[i][1])
-		cid := kmeans.Labels[i]
-		points[i] = ProjectionPoint{
+		x := float32(embedding[i][0])
+		y := float32(embedding[i][1])
+		cid := clusterLabels[i]
+		pp := ProjectionPoint{
 			PositionID: id,
 			X:          x,
 			Y:          y,
-			ClusterID:  &cid,
 		}
+		if cid >= 0 {
+			pp.ClusterID = &cid
+		}
+		points[i] = pp
+	}
+
+	featureInfo := `"features":"all"`
+	if len(cfg.FeatureIndices) > 0 {
+		featureInfo = fmt.Sprintf(`"features":%d`, len(cfg.FeatureIndices))
 	}
 
 	return &ProjectionComputeResult{
 		Points:  points,
-		Method:  "pca_2d",
-		Params:  fmt.Sprintf(`{"k":%d,"n":%d,"variance":[%.4f,%.4f]}`, cfg.K, len(ids), pca.Variance[0], pca.Variance[1]),
+		Method:  cfg.Method,
+		Params:  fmt.Sprintf(`{%s,"n":%d,%s,%s}`, varianceInfo, len(ids), clusterInfo, featureInfo),
 		NPoints: len(ids),
 	}, nil
 }
@@ -389,15 +497,35 @@ func SaveProjectionResult(ctx context.Context, store Store, result *ProjectionCo
 		return fmt.Errorf("create run: %w", err)
 	}
 
-	// Insert in batches of 5000.
-	batch := 5000
-	for i := 0; i < len(result.Points); i += batch {
-		end := i + batch
-		if end > len(result.Points) {
-			end = len(result.Points)
+	// Insert all points in batches of 5000, wrapped in a single transaction
+	// when the store implements Batcher. This prevents race conditions with
+	// concurrent import operations that share the same s.tx field.
+	if b, ok := store.(Batcher); ok {
+		if err := b.BeginBatch(ctx); err != nil {
+			return fmt.Errorf("begin insert: %w", err)
 		}
-		if err := store.InsertProjectionBatch(ctx, runID, result.Points[i:end]); err != nil {
-			return fmt.Errorf("insert batch at %d: %w", i, err)
+		for i := 0; i < len(result.Points); i += 5000 {
+			end := i + 5000
+			if end > len(result.Points) {
+				end = len(result.Points)
+			}
+			if err := store.InsertProjectionBatch(ctx, runID, result.Points[i:end]); err != nil {
+				b.RollbackBatch()
+				return fmt.Errorf("insert batch at %d: %w", i, err)
+			}
+		}
+		if err := b.CommitBatch(); err != nil {
+			return fmt.Errorf("commit insert: %w", err)
+		}
+	} else {
+		for i := 0; i < len(result.Points); i += 5000 {
+			end := i + 5000
+			if end > len(result.Points) {
+				end = len(result.Points)
+			}
+			if err := store.InsertProjectionBatch(ctx, runID, result.Points[i:end]); err != nil {
+				return fmt.Errorf("insert batch at %d: %w", i, err)
+			}
 		}
 	}
 
@@ -441,6 +569,40 @@ func copySlice(s []float64) []float64 {
 	c := make([]float64, len(s))
 	copy(c, s)
 	return c
+}
+
+// standardScale centers and scales each column to zero mean and unit variance.
+func standardScale(features [][]float64) {
+	if len(features) == 0 {
+		return
+	}
+	n := len(features)
+	d := len(features[0])
+	mean := make([]float64, d)
+	std := make([]float64, d)
+	for j := 0; j < d; j++ {
+		var s float64
+		for i := 0; i < n; i++ {
+			s += features[i][j]
+		}
+		mean[j] = s / float64(n)
+	}
+	for j := 0; j < d; j++ {
+		var s float64
+		for i := 0; i < n; i++ {
+			diff := features[i][j] - mean[j]
+			s += diff * diff
+		}
+		std[j] = math.Sqrt(s / float64(n))
+		if std[j] < 1e-12 {
+			std[j] = 1
+		}
+	}
+	for i := 0; i < n; i++ {
+		for j := 0; j < d; j++ {
+			features[i][j] = (features[i][j] - mean[j]) / std[j]
+		}
+	}
 }
 
 // SilhouetteScore computes a simplified silhouette score for the clustering.

@@ -71,6 +71,16 @@ type PositionSummary struct {
 }
 
 // ScoreDistribution holds aggregated stats for one away-score combination.
+
+// MatchMetadataRow holds match metadata for display purposes.
+type MatchMetadataRow struct {
+	MatchID     int64
+	Player1     string
+	Player2     string
+	MatchLength int
+	Event       string
+	Date        string
+}
 type ScoreDistribution struct {
 	AwayX         int
 	AwayO         int

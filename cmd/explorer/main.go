@@ -106,10 +106,13 @@ func main() {
 	mux.HandleFunc("GET /api/features/sample", srv.requireDB(srv.handleFeatureSample))
 	mux.HandleFunc("POST /api/import/start", srv.requireDB(srv.handleImportStart))
 	mux.HandleFunc("GET /api/import/progress", srv.handleImportProgress)
+	mux.HandleFunc("GET /api/import/status", srv.handleImportStatus)
+	mux.HandleFunc("POST /api/import/cancel", srv.handleImportCancel)
 
 	// Projection compute API.
 	mux.HandleFunc("POST /api/projection/compute", srv.requireDB(srv.handleProjectionCompute))
 	mux.HandleFunc("GET /api/projection/progress", srv.handleProjectionProgress)
+	mux.HandleFunc("GET /api/projection/status", srv.handleProjectionStatus)
 
 	// Viz routes (registered dynamically when DB opens).
 	mux.HandleFunc("GET /api/viz/projection", srv.requireDB(srv.handleVizProxy("projection")))
@@ -171,11 +174,13 @@ type server struct {
 	importRunning  bool
 	importProgress []progressEvent
 	importDone     bool
+	importCancel   context.CancelFunc // non-nil while running
 
 	projMu       sync.Mutex
 	projRunning  bool
 	projProgress []projectionEvent
 	projDone     bool
+	projCancel   context.CancelFunc
 }
 
 func (s *server) openDB(path string) error {
@@ -231,11 +236,13 @@ type progressEvent struct {
 	Time       time.Time `json:"time"`
 	FilesDone  int       `json:"files_done"`
 	FilesTotal int       `json:"files_total"`
+	Skipped    int       `json:"skipped"`
 	Positions  int       `json:"positions"`
 	Rate       float64   `json:"rate"`
 	Elapsed    string    `json:"elapsed"`
 	Remaining  string    `json:"remaining"`
 	Done       bool      `json:"done"`
+	Cancelled  bool      `json:"cancelled,omitempty"`
 	Error      string    `json:"error,omitempty"`
 }
 
@@ -338,6 +345,8 @@ func (s *server) handleBrowseDir(w http.ResponseWriter, r *http.Request) {
 	if dir == "" {
 		dir, _ = os.Getwd()
 	}
+	// mode: "db" = dirs + .db/.sqlite files only; "bmab" = dirs only
+	mode := r.URL.Query().Get("mode")
 
 	absDir, err := filepath.Abs(dir)
 	if err != nil {
@@ -357,18 +366,48 @@ func (s *server) handleBrowseDir(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var items []dirEntry
-	// Add parent.
+	// Add parent link.
 	parent := filepath.Dir(absDir)
 	if parent != absDir {
 		items = append(items, dirEntry{Name: "..", IsDir: true})
 	}
+	const maxEntries = 300
+	shown := 0
+	truncated := false
 	for _, e := range entries {
-		items = append(items, dirEntry{Name: e.Name(), IsDir: e.IsDir()})
+		isDir := e.IsDir()
+		name := e.Name()
+		// Skip hidden entries.
+		if len(name) > 0 && name[0] == '.' {
+			continue
+		}
+		switch mode {
+		case "bmab":
+			// Only show directories.
+			if !isDir {
+				continue
+			}
+		case "db":
+			// Show directories + .db / .sqlite files.
+			if !isDir {
+				ext := filepath.Ext(name)
+				if ext != ".db" && ext != ".sqlite" && ext != ".sqlite3" {
+					continue
+				}
+			}
+		}
+		if shown >= maxEntries {
+			truncated = true
+			break
+		}
+		items = append(items, dirEntry{Name: name, IsDir: isDir})
+		shown++
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"path":    absDir,
-		"entries": items,
+		"path":      absDir,
+		"truncated": truncated,
+		"entries":   items,
 	})
 }
 
@@ -428,11 +467,7 @@ func (s *server) handleStats(w http.ResponseWriter, r *http.Request) {
 
 	sd, err := store.QueryScoreDistribution(ctx)
 	if err == nil {
-		limit := 20
-		if len(sd) < limit {
-			limit = len(sd)
-		}
-		for _, d := range sd[:limit] {
+		for _, d := range sd {
 			resp.ScoreDist = append(resp.ScoreDist, scoreDist{
 				AwayX: d.AwayX, AwayO: d.AwayO,
 				Count: d.Count, AvgEq: d.AvgEquityDiff,
@@ -539,6 +574,7 @@ type importRequest struct {
 func (s *server) handleImportStart(w http.ResponseWriter, r *http.Request) {
 	s.mu.RLock()
 	bmabDir := s.bmabDir
+	dbPath := s.dbPath
 	s.mu.RUnlock()
 
 	if bmabDir == "" {
@@ -552,9 +588,11 @@ func (s *server) handleImportStart(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, "import already running")
 		return
 	}
+	ctx, cancel := context.WithCancel(context.Background())
 	s.importRunning = true
 	s.importProgress = nil
 	s.importDone = false
+	s.importCancel = cancel
 	s.importMu.Unlock()
 
 	var req importRequest
@@ -570,8 +608,10 @@ func (s *server) handleImportStart(w http.ResponseWriter, r *http.Request) {
 
 	files, err := countXGFiles(bmabDir)
 	if err != nil {
+		cancel()
 		s.importMu.Lock()
 		s.importRunning = false
+		s.importCancel = nil
 		s.importMu.Unlock()
 		writeError(w, http.StatusInternalServerError, fmt.Sprintf("scan dir: %v", err))
 		return
@@ -581,20 +621,26 @@ func (s *server) handleImportStart(w http.ResponseWriter, r *http.Request) {
 		limit = 1
 	}
 
-	s.logger.Printf("import: starting %.1f%% (%d/%d files)", req.Proportion*100, limit, files)
+	// Journal file lives next to the database so progress survives restarts.
+	journalPath := ""
+	if dbPath != "" {
+		journalPath = dbPath + ".import.journal"
+	}
 
-	go s.runImport(limit, req.BatchSize, files, bmabDir)
+	s.logger.Printf("import: starting %.1f%% (%d/%d files) journal=%s", req.Proportion*100, limit, files, journalPath)
+
+	go s.runImport(ctx, limit, req.BatchSize, files, bmabDir, journalPath)
 
 	writeJSON(w, http.StatusAccepted, map[string]any{
-		"message":    "import started",
-		"files":      files,
-		"limit":      limit,
-		"proportion": req.Proportion,
+		"message":      "import started",
+		"files":        files,
+		"limit":        limit,
+		"proportion":   req.Proportion,
+		"journal_path": journalPath,
 	})
 }
 
-func (s *server) runImport(limit, batchSize, totalFiles int, bmabDir string) {
-	ctx := context.Background()
+func (s *server) runImport(ctx context.Context, limit, batchSize, totalFiles int, bmabDir, journalPath string) {
 	start := time.Now()
 
 	s.mu.RLock()
@@ -604,6 +650,7 @@ func (s *server) runImport(limit, batchSize, totalFiles int, bmabDir string) {
 	opts := gbf.ImportOpts{
 		BatchSize:        batchSize,
 		Limit:            limit,
+		JournalPath:      journalPath,
 		ProgressInterval: 50,
 		EngineName:       "eXtreme Gammon",
 		Logger:           s.logger,
@@ -617,6 +664,7 @@ func (s *server) runImport(limit, batchSize, totalFiles int, bmabDir string) {
 				Time:       time.Now(),
 				FilesDone:  p.FilesDone,
 				FilesTotal: p.FilesTotal,
+				Skipped:    p.Skipped,
 				Positions:  p.Positions,
 				Rate:       p.Rate,
 				Elapsed:    p.Elapsed.Round(time.Second).String(),
@@ -630,21 +678,25 @@ func (s *server) runImport(limit, batchSize, totalFiles int, bmabDir string) {
 	s.importMu.Lock()
 	defer s.importMu.Unlock()
 
+	cancelled := ctx.Err() != nil
 	evt := progressEvent{
 		Time:       time.Now(),
 		FilesDone:  report.FilesImported,
 		FilesTotal: totalFiles,
+		Skipped:    report.FilesSkipped,
 		Positions:  report.Positions,
 		Rate:       report.AvgRate,
 		Elapsed:    time.Since(start).Round(time.Second).String(),
 		Done:       true,
+		Cancelled:  cancelled,
 	}
-	if err != nil {
+	if err != nil && !cancelled {
 		evt.Error = err.Error()
 	}
 	s.importProgress = append(s.importProgress, evt)
 	s.importDone = true
 	s.importRunning = false
+	s.importCancel = nil
 }
 
 func (s *server) handleImportProgress(w http.ResponseWriter, r *http.Request) {
@@ -698,12 +750,83 @@ func countXGFiles(dir string) (int, error) {
 	return count, err
 }
 
+// handleImportStatus returns whether an import is running/done and the last event.
+// Used by the UI to restore state after a tab switch.
+func (s *server) handleImportStatus(w http.ResponseWriter, r *http.Request) {
+	s.importMu.Lock()
+	running := s.importRunning
+	done := s.importDone
+	count := len(s.importProgress)
+	var last *progressEvent
+	if count > 0 {
+		e := s.importProgress[count-1]
+		last = &e
+	}
+	s.importMu.Unlock()
+
+	s.mu.RLock()
+	dbPath := s.dbPath
+	s.mu.RUnlock()
+
+	journalPath := ""
+	if dbPath != "" {
+		journalPath = dbPath + ".import.journal"
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"running":      running,
+		"done":         done,
+		"event_count":  count,
+		"last_event":   last,
+		"journal_path": journalPath,
+	})
+}
+
+// handleImportCancel cancels a running import.
+func (s *server) handleImportCancel(w http.ResponseWriter, r *http.Request) {
+	s.importMu.Lock()
+	cancel := s.importCancel
+	s.importMu.Unlock()
+
+	if cancel != nil {
+		cancel()
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "cancelled"})
+}
+
+// handleProjectionStatus returns whether a projection compute is running/done.
+func (s *server) handleProjectionStatus(w http.ResponseWriter, r *http.Request) {
+	s.projMu.Lock()
+	running := s.projRunning
+	done := s.projDone
+	count := len(s.projProgress)
+	var last *projectionEvent
+	if count > 0 {
+		e := s.projProgress[count-1]
+		last = &e
+	}
+	s.projMu.Unlock()
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"running":     running,
+		"done":        done,
+		"event_count": count,
+		"last_event":  last,
+	})
+}
+
 // ── Projection Compute API ──────────────────────────────────────────────────
 
 type computeRequest struct {
-	Method     string `json:"method"`      // "pca_2d" (only Go-native method)
-	K          int    `json:"k"`           // clusters for k-means
-	SampleSize int    `json:"sample_size"` // 0 = all positions
+	Method           string `json:"method"`             // "pca_2d", "tsne_2d"
+	K                int    `json:"k"`                  // clusters for k-means (0 = use HDBSCAN)
+	SampleSize       int    `json:"sample_size"`        // 0 = all positions
+	ClusterMethod    string `json:"cluster_method"`     // "kmeans" or "hdbscan"
+	Perplexity       int    `json:"perplexity"`         // t-SNE perplexity (default 30)
+	TSNEIter         int    `json:"tsne_iter"`          // t-SNE iterations (default 1000)
+	HDBSCANMinSize   int    `json:"hdbscan_min_size"`   // HDBSCAN min cluster size
+	HDBSCANMinSample int    `json:"hdbscan_min_sample"` // HDBSCAN min samples
+	FeatureIndices   []int  `json:"feature_indices"`    // feature selection (nil = all)
 }
 
 func (s *server) handleProjectionCompute(w http.ResponseWriter, r *http.Request) {
@@ -713,9 +836,11 @@ func (s *server) handleProjectionCompute(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusConflict, "projection computation already running")
 		return
 	}
+	ctx, cancel := context.WithCancel(context.Background())
 	s.projRunning = true
 	s.projProgress = nil
 	s.projDone = false
+	s.projCancel = cancel
 	s.projMu.Unlock()
 
 	var req computeRequest
@@ -729,8 +854,8 @@ func (s *server) handleProjectionCompute(w http.ResponseWriter, r *http.Request)
 		req.K = 8
 	}
 
-	s.logger.Printf("projection: starting %s k=%d sample=%d", req.Method, req.K, req.SampleSize)
-	go s.runProjectionCompute(req)
+	s.logger.Printf("projection: starting %s cluster=%s k=%d sample=%d", req.Method, req.ClusterMethod, req.K, req.SampleSize)
+	go s.runProjectionCompute(ctx, req)
 
 	writeJSON(w, http.StatusAccepted, map[string]string{
 		"status": "started",
@@ -738,19 +863,23 @@ func (s *server) handleProjectionCompute(w http.ResponseWriter, r *http.Request)
 	})
 }
 
-func (s *server) runProjectionCompute(req computeRequest) {
-	ctx := context.Background()
-
+func (s *server) runProjectionCompute(ctx context.Context, req computeRequest) {
 	s.mu.RLock()
 	store := s.store
 	s.mu.RUnlock()
 
 	cfg := gbf.ProjectionConfig{
-		Method:         req.Method,
-		K:              req.K,
-		SampleSize:     req.SampleSize,
-		Seed:           42,
-		FeatureVersion: "v1.0",
+		Method:           req.Method,
+		K:                req.K,
+		SampleSize:       req.SampleSize,
+		Seed:             42,
+		FeatureVersion:   "v1.0",
+		ClusterMethod:    req.ClusterMethod,
+		Perplexity:       float64(req.Perplexity),
+		TSNEIter:         req.TSNEIter,
+		HDBSCANMinSize:   req.HDBSCANMinSize,
+		HDBSCANMinSample: req.HDBSCANMinSample,
+		FeatureIndices:   req.FeatureIndices,
 		ProgressFn: func(stage string, pct int) {
 			s.projMu.Lock()
 			defer s.projMu.Unlock()
@@ -774,6 +903,7 @@ func (s *server) runProjectionCompute(req computeRequest) {
 		})
 		s.projDone = true
 		s.projRunning = false
+		s.projCancel = nil
 		s.projMu.Unlock()
 		return
 	}
@@ -788,6 +918,7 @@ func (s *server) runProjectionCompute(req computeRequest) {
 		})
 		s.projDone = true
 		s.projRunning = false
+		s.projCancel = nil
 		s.projMu.Unlock()
 		return
 	}
@@ -802,6 +933,7 @@ func (s *server) runProjectionCompute(req computeRequest) {
 	})
 	s.projDone = true
 	s.projRunning = false
+	s.projCancel = nil
 	s.projMu.Unlock()
 
 	s.logger.Printf("projection: done — %d points", result.NPoints)
