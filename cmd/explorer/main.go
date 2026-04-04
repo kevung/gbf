@@ -478,7 +478,7 @@ func (s *server) handleStats(w http.ResponseWriter, r *http.Request) {
 		resp.ScoreDist = []scoreDist{}
 	}
 
-	methods := []string{"umap_2d", "pca_2d", "umap_3d"}
+	methods := []string{"umap_2d", "pca_2d", "tsne_2d", "umap_3d"}
 	for _, m := range methods {
 		run, err := store.ActiveProjectionRun(ctx, m)
 		if err == nil && run != nil {
@@ -818,15 +818,17 @@ func (s *server) handleProjectionStatus(w http.ResponseWriter, r *http.Request) 
 // ── Projection Compute API ──────────────────────────────────────────────────
 
 type computeRequest struct {
-	Method           string `json:"method"`             // "pca_2d", "tsne_2d"
-	K                int    `json:"k"`                  // clusters for k-means (0 = use HDBSCAN)
-	SampleSize       int    `json:"sample_size"`        // 0 = all positions
-	ClusterMethod    string `json:"cluster_method"`     // "kmeans" or "hdbscan"
-	Perplexity       int    `json:"perplexity"`         // t-SNE perplexity (default 30)
-	TSNEIter         int    `json:"tsne_iter"`          // t-SNE iterations (default 1000)
-	HDBSCANMinSize   int    `json:"hdbscan_min_size"`   // HDBSCAN min cluster size
-	HDBSCANMinSample int    `json:"hdbscan_min_sample"` // HDBSCAN min samples
-	FeatureIndices   []int  `json:"feature_indices"`    // feature selection (nil = all)
+	Method           string  `json:"method"`             // "pca_2d", "tsne_2d", "umap_2d"
+	K                int     `json:"k"`                  // clusters for k-means (0 = use HDBSCAN)
+	SampleSize       int     `json:"sample_size"`        // 0 = all positions
+	ClusterMethod    string  `json:"cluster_method"`     // "kmeans" or "hdbscan"
+	Perplexity       int     `json:"perplexity"`         // t-SNE perplexity (default 30)
+	TSNEIter         int     `json:"tsne_iter"`          // t-SNE iterations (default 1000)
+	HDBSCANMinSize   int     `json:"hdbscan_min_size"`   // HDBSCAN min cluster size
+	HDBSCANMinSample int     `json:"hdbscan_min_sample"` // HDBSCAN min samples
+	FeatureIndices   []int   `json:"feature_indices"`    // feature selection (nil = all)
+	NNeighbors       int     `json:"n_neighbors"`        // UMAP n_neighbors (default 15)
+	UMAPMinDist      float64 `json:"umap_min_dist"`      // UMAP min_dist (default 0.1)
 }
 
 func (s *server) handleProjectionCompute(w http.ResponseWriter, r *http.Request) {
@@ -864,6 +866,23 @@ func (s *server) handleProjectionCompute(w http.ResponseWriter, r *http.Request)
 }
 
 func (s *server) runProjectionCompute(ctx context.Context, req computeRequest) {
+	defer func() {
+		if r := recover(); r != nil {
+			s.projMu.Lock()
+			s.projProgress = append(s.projProgress, projectionEvent{
+				Time:  time.Now(),
+				Stage: "error",
+				Done:  true,
+				Error: fmt.Sprintf("panic: %v", r),
+			})
+			s.projDone = true
+			s.projRunning = false
+			s.projCancel = nil
+			s.projMu.Unlock()
+			s.logger.Printf("projection: panic recovered: %v", r)
+		}
+	}()
+
 	s.mu.RLock()
 	store := s.store
 	s.mu.RUnlock()
@@ -877,6 +896,8 @@ func (s *server) runProjectionCompute(ctx context.Context, req computeRequest) {
 		ClusterMethod:    req.ClusterMethod,
 		Perplexity:       float64(req.Perplexity),
 		TSNEIter:         req.TSNEIter,
+		UMAPNeighbors:    req.NNeighbors,
+		UMAPMinDist:      req.UMAPMinDist,
 		HDBSCANMinSize:   req.HDBSCANMinSize,
 		HDBSCANMinSample: req.HDBSCANMinSample,
 		FeatureIndices:   req.FeatureIndices,

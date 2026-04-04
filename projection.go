@@ -266,7 +266,7 @@ func ComputeKMeans(points [][]float64, k, maxIter int, seed uint64) (*KMeansResu
 
 // ProjectionConfig configures a projection computation.
 type ProjectionConfig struct {
-	Method         string // "pca_2d", "tsne_2d"
+	Method         string // "pca_2d", "tsne_2d", "umap_2d"
 	K              int    // number of clusters for k-means (default: 8; 0 = use HDBSCAN)
 	SampleSize     int    // subsample if > 0 and < total positions
 	Seed           uint64
@@ -276,6 +276,10 @@ type ProjectionConfig struct {
 	// t-SNE specific.
 	Perplexity float64 // t-SNE perplexity (default 30)
 	TSNEIter   int     // t-SNE iterations (default 1000)
+
+	// UMAP specific.
+	UMAPNeighbors int     // UMAP n_neighbors (default 15)
+	UMAPMinDist   float64 // UMAP min_dist (default 0.1)
 
 	// Clustering.
 	ClusterMethod    string // "kmeans" (default) or "hdbscan"
@@ -362,7 +366,44 @@ func ComputeProjectionFromStore(ctx context.Context, store Store, cfg Projection
 	var varianceInfo string
 
 	switch cfg.Method {
+	case "umap_2d":
+		progress("computing_umap", 0)
+		featuresCopy := make([][]float64, len(features))
+		for i, f := range features {
+			featuresCopy[i] = copySlice(f)
+		}
+		standardScale(featuresCopy)
+
+		nNeighbors := cfg.UMAPNeighbors
+		if nNeighbors <= 0 {
+			nNeighbors = 15
+		}
+		minDist := cfg.UMAPMinDist
+		if minDist <= 0 {
+			minDist = 0.1
+		}
+		result, err := ComputeUMAP(featuresCopy, UMAPConfig{
+			NComponents: 2,
+			NNeighbors:  nNeighbors,
+			MinDist:     minDist,
+			Seed:        cfg.Seed,
+			ProgressFn: func(epoch, maxEpoch int) {
+				progress("computing_umap", epoch*100/maxEpoch)
+			},
+		})
+		if err != nil {
+			return nil, fmt.Errorf("UMAP: %w", err)
+		}
+		embedding = result.Embedding
+		varianceInfo = fmt.Sprintf(`"n_neighbors":%d,"min_dist":%.3f`, nNeighbors, minDist)
+		progress("computing_umap", 100)
+
 	case "tsne_2d":
+		// t-SNE builds O(n²) matrices; cap to avoid OOM.
+		const tsneMaxN = 5000
+		if len(features) > tsneMaxN {
+			return nil, fmt.Errorf("t-SNE limited to %d points (got %d); use sample_size or switch to umap_2d", tsneMaxN, len(features))
+		}
 		progress("computing_tsne", 0)
 		featuresCopy := make([][]float64, len(features))
 		for i, f := range features {
