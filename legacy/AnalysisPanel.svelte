@@ -1,0 +1,736 @@
+<script>
+    import { analysisStore, selectedMoveStore } from '../stores/analysisStore'; // Import analysisStore and selectedMoveStore
+    import { positionStore, matchContextStore } from '../stores/positionStore'; // Import positionStore and matchContextStore
+    import { showAnalysisStore, showFilterLibraryPanelStore, showCommentStore } from '../stores/uiStore'; // Import showAnalysisStore
+    export let visible = false;
+    export let onClose;
+
+    let analysisData;
+    let cubeValue;
+    let activeTab = 'checker'; // 'checker' or 'cube'
+    let matchCtx;
+
+    // Sorting state for checker analysis table
+    let sortColumn = 'equity';  // default sort by equity
+    let sortDirection = 'desc'; // default highest to lowest
+
+    // Subscribe to matchContextStore
+    matchContextStore.subscribe(value => {
+        matchCtx = value;
+        // Auto-switch tab based on current move type in match mode
+        // But only if no move is currently selected (to avoid interfering with move navigation)
+        if (matchCtx.isMatchMode && matchCtx.movePositions.length > 0 && !$selectedMoveStore) {
+            const currentMovePos = matchCtx.movePositions[matchCtx.currentIndex];
+            if (currentMovePos) {
+                // If it's the first position of a game (move_number 0 or 1), force checker tab and clear cube data
+                if (currentMovePos.move_number === 0 || currentMovePos.move_number === 1) {
+                    activeTab = 'checker';
+                    // Clear any existing cube analysis data
+                    analysisStore.update(current => ({
+                        ...current,
+                        doublingCubeAnalysis: null,
+                        playedCubeAction: ''
+                    }));
+                } else if (currentMovePos.move_type) {
+                    activeTab = currentMovePos.move_type;
+                }
+            }
+        }
+    });
+
+    // Subscribe to analysisStore to get the analysis data
+    analysisStore.subscribe(value => {
+        analysisData = value;
+    });
+
+    // Subscribe to positionStore to get the cube value
+    positionStore.subscribe(value => {
+        cubeValue = value.cube.value;
+    });
+
+    showAnalysisStore.subscribe(async value => {
+        visible = value;
+        if(visible) {
+            // Pre-load cube analysis in match mode if current position is checker
+            if (matchCtx.isMatchMode) {
+                const currentMovePos = matchCtx.movePositions[matchCtx.currentIndex];
+                if (currentMovePos && currentMovePos.move_type === 'checker') {
+                    // If it's the first position of a game (move_number 0 or 1), clear cube data immediately
+                    if (currentMovePos.move_number === 0 || currentMovePos.move_number === 1) {
+                        analysisStore.update(current => ({
+                            ...current,
+                            doublingCubeAnalysis: null,
+                            playedCubeAction: ''
+                        }));
+                    } else {
+                        // Load cube analysis in background (only if there's one in the same game)
+                        const hasCubeInGame = await loadCubeAnalysisForCurrentPosition();
+                        // If no cube analysis found in current game, clear any previous cube data
+                        if (!hasCubeInGame) {
+                            analysisStore.update(current => ({
+                                ...current,
+                                doublingCubeAnalysis: null,
+                                playedCubeAction: ''
+                            }));
+                        }
+                    }
+                }
+            }
+            
+            setTimeout(() => {
+                const analysisEl = document.getElementById('analysisPanel');
+                if (analysisEl) {
+                    analysisEl.focus();
+                }
+            }, 0);
+        } else {
+            // Clear selected move when panel is closed
+            selectedMoveStore.set(null);
+        }
+    });
+
+    function handleKeyDown(event) {
+        if (event.key === 'Escape') {
+            // Clear selection first if a move is selected
+            if ($selectedMoveStore) {
+                selectedMoveStore.set(null);
+            } else {
+                onClose();
+            }
+            return;
+        }
+
+        // Handle tab switching with 'd' (doubling/cube) key to toggle
+        // Only allow if showTabs is true (not first position of game)
+        if (showTabs && (event.key === 'd' || event.key === 'D')) {
+            event.preventDefault();
+            const newTab = activeTab === 'checker' ? 'cube' : 'checker';
+            handleTabSwitch(newTab);
+            return;
+        }
+
+        // Handle j/k and arrow keys for move navigation when a move is selected
+        // This should work regardless of which tab is active
+        if ($selectedMoveStore) {
+            if (!sortedMoves || sortedMoves.length === 0) {
+                return; // No moves to navigate
+            }
+            
+            const currentIndex = sortedMoves.findIndex(m => m.move === $selectedMoveStore);
+            
+            if (event.key === 'j' || event.key === 'ArrowDown') {
+                event.preventDefault();
+                if (currentIndex >= 0 && currentIndex < sortedMoves.length - 1) {
+                    selectedMoveStore.set(sortedMoves[currentIndex + 1].move);
+                }
+                return;
+            } else if (event.key === 'k' || event.key === 'ArrowUp') {
+                event.preventDefault();
+                if (currentIndex > 0) {
+                    selectedMoveStore.set(sortedMoves[currentIndex - 1].move);
+                }
+                return;
+            }
+        }
+    }
+
+    // Column definitions for sorting
+    const sortableColumns = {
+        'move': { key: 'move', type: 'string' },
+        'equity': { key: 'equity', type: 'number' },
+        'error': { key: 'equityError', type: 'number' },
+        'pw': { key: 'playerWinChance', type: 'number' },
+        'pg': { key: 'playerGammonChance', type: 'number' },
+        'pb': { key: 'playerBackgammonChance', type: 'number' },
+        'ow': { key: 'opponentWinChance', type: 'number' },
+        'og': { key: 'opponentGammonChance', type: 'number' },
+        'ob': { key: 'opponentBackgammonChance', type: 'number' },
+        'depth': { key: 'analysisDepth', type: 'number' },
+        'engine': { key: 'analysisEngine', type: 'string' }
+    };
+
+    // Detect if multiple engines are present in checker analysis
+    $: hasMultipleEngines = (() => {
+        if (!analysisData?.checkerAnalysis?.moves) return false;
+        const engines = new Set(analysisData.checkerAnalysis.moves.map(m => m.analysisEngine || '').filter(e => e));
+        return engines.size > 1;
+    })();
+
+    function handleSort(column) {
+        if (sortColumn === column) {
+            sortDirection = sortDirection === 'asc' ? 'desc' : 'asc';
+        } else {
+            sortColumn = column;
+            // Default direction: desc for numeric, asc for string
+            sortDirection = sortableColumns[column].type === 'string' ? 'asc' : 'desc';
+        }
+    }
+
+    // Reactive sorted moves array
+    $: sortedMoves = (() => {
+        if (!analysisData?.checkerAnalysis?.moves) return [];
+        const moves = [...analysisData.checkerAnalysis.moves];
+        const col = sortableColumns[sortColumn];
+        if (!col) return moves;
+        return moves.sort((a, b) => {
+            let va = a[col.key];
+            let vb = b[col.key];
+            if (col.type === 'number') {
+                va = va || 0;
+                vb = vb || 0;
+                return sortDirection === 'asc' ? va - vb : vb - va;
+            } else {
+                va = va || '';
+                vb = vb || '';
+                const cmp = va.localeCompare(vb);
+                return sortDirection === 'asc' ? cmp : -cmp;
+            }
+        });
+    })();
+
+    function getSortIndicator(column) {
+        if (sortColumn !== column) return '';
+        return sortDirection === 'asc' ? ' ▲' : ' ▼';
+    }
+
+    function handleMoveRowClick(move) {
+        // Toggle selection: if clicking the same move, deselect it
+        if ($selectedMoveStore === move.move) {
+            selectedMoveStore.set(null);
+        } else {
+            selectedMoveStore.set(move.move);
+        }
+    }
+
+    function formatEquity(value) {
+        return value >= 0 ? `+${value.toFixed(3)}` : value.toFixed(3);
+    }
+
+    function getDecisionLabel(decision) {
+        if (cubeValue >= 1) {
+            return decision.replace('Double', 'Redouble');
+        }
+        return decision;
+    }
+
+    // Normalize a move string for comparison by sorting individual moves
+    // "5/2 5/4" and "5/4 5/2" are the same move but in different order
+    function normalizeMoveString(move) {
+        if (!move) return '';
+        // Split by spaces and sort the individual moves
+        return move.split(' ').sort().join(' ');
+    }
+
+    function isPlayedMove(move) {
+        if (!move.move) return false;
+        
+        const normalizedMoveStr = normalizeMoveString(move.move);
+        
+        // In MATCH mode, only highlight the current match's specific move
+        if (matchCtx.isMatchMode) {
+            // Use the single playedMove field which contains the current match's move
+            if (analysisData.playedMove) {
+                return normalizeMoveString(analysisData.playedMove) === normalizedMoveStr;
+            }
+            return false;
+        }
+        
+        // In normal mode (browsing positions), highlight all played moves
+        // Check the playedMoves array first
+        if (analysisData.playedMoves && analysisData.playedMoves.length > 0) {
+            for (const playedMove of analysisData.playedMoves) {
+                if (normalizeMoveString(playedMove) === normalizedMoveStr) {
+                    return true;
+                }
+            }
+        }
+        
+        // Fallback to old single playedMove field for backward compatibility
+        if (analysisData.playedMove) {
+            return normalizeMoveString(analysisData.playedMove) === normalizedMoveStr;
+        }
+        
+        return false;
+    }
+
+    // Normalize cube action for exact matching
+    // Maps all variants to canonical forms: "nodouble", "double", "take", "pass"
+    function normalizeCubeAction(action) {
+        const s = action.toLowerCase().replace(/\s+/g, '');
+        // Map combined actions to individual parts
+        if (s === 'double/take' || s === 'doubletake') return ['double', 'take'];
+        if (s === 'double/pass' || s === 'doublepass') return ['double', 'pass'];
+        if (s === 'nodouble' || s === 'nodoubleorredouble' || s === 'noredouble') return ['nodouble'];
+        if (s === 'redouble') return ['double'];
+        return [s]; // "double", "take", "pass", etc.
+    }
+
+    function isPlayedCubeAction(action) {
+        const actionParts = normalizeCubeAction(action);
+
+        // In MATCH mode, only highlight the current match's specific cube action
+        if (matchCtx.isMatchMode) {
+            if (analysisData.playedCubeAction) {
+                const playedParts = normalizeCubeAction(analysisData.playedCubeAction);
+                return actionParts.every(a => playedParts.includes(a));
+            }
+            return false;
+        }
+        
+        // In normal mode, highlight all played cube actions
+        // Collect all canonical played parts from all played actions
+        const allPlayedParts = new Set();
+
+        if (analysisData.playedCubeActions && analysisData.playedCubeActions.length > 0) {
+            for (const playedAction of analysisData.playedCubeActions) {
+                for (const part of normalizeCubeAction(playedAction)) {
+                    allPlayedParts.add(part);
+                }
+            }
+        }
+        
+        // Fallback to old single playedCubeAction field for backward compatibility
+        if (allPlayedParts.size === 0 && analysisData.playedCubeAction) {
+            for (const part of normalizeCubeAction(analysisData.playedCubeAction)) {
+                allPlayedParts.add(part);
+            }
+        }
+
+        if (allPlayedParts.size === 0) return false;
+        
+        return actionParts.every(a => allPlayedParts.has(a));
+    }
+
+    async function switchTab(tab) {
+        activeTab = tab;
+        
+        // When switching to cube tab in match mode, load the cube analysis and update position
+        if (tab === 'cube' && matchCtx.isMatchMode) {
+            await loadCubeAnalysisForCurrentPosition(true); // true = update position to show cube position
+        }
+    }
+
+    // Load cube analysis for current checker position (find previous cube position)
+    // Returns true if cube analysis was found in the same game, false otherwise
+    async function loadCubeAnalysisForCurrentPosition(updatePosition = false) {
+        if (!matchCtx.isMatchMode) return false;
+        
+        const currentIndex = matchCtx.currentIndex;
+        const movePositions = matchCtx.movePositions;
+        const currentMovePos = movePositions[currentIndex];
+        
+        // If we're on the first position of a game (move_number 0 or 1), no cube decision is possible
+        if (currentMovePos && (currentMovePos.move_number === 0 || currentMovePos.move_number === 1)) {
+            return false;
+        }
+        
+        const currentGameNumber = movePositions[currentIndex].game_number;
+        
+        // Find the most recent cube decision before current position IN THE SAME GAME
+        for (let i = currentIndex - 1; i >= 0; i--) {
+            // Stop if we've gone to a different game
+            if (movePositions[i].game_number !== currentGameNumber) {
+                break;
+            }
+            
+            if (movePositions[i].move_type === 'cube') {
+                // Load analysis for this cube position
+                try {
+                    const { LoadAnalysis } = await import('../../wailsjs/go/main/Database.js');
+                    const cubeAnalysis = await LoadAnalysis(movePositions[i].position.id);
+                    if (cubeAnalysis && cubeAnalysis.doublingCubeAnalysis) {
+                        // Update only the cube analysis part
+                        analysisStore.update(current => ({
+                            ...current,
+                            doublingCubeAnalysis: cubeAnalysis.doublingCubeAnalysis,
+                            playedCubeAction: cubeAnalysis.playedCubeAction || ''
+                        }));
+                        
+                        // Only update position if explicitly requested (when clicking cube tab)
+                        if (updatePosition) {
+                            const cubePosition = {...movePositions[i].position};
+                            cubePosition.dice = [0, 0];
+                            positionStore.set(cubePosition);
+                        }
+                        return true; // Found cube analysis in current game
+                    }
+                } catch (error) {
+                    console.error('Error loading cube analysis:', error);
+                }
+                return false;
+            }
+        }
+        return false; // No cube analysis found in current game
+    }
+
+    // When switching back to checker tab, restore checker position
+    async function restoreCheckerPosition() {
+        if (matchCtx.isMatchMode) {
+            const currentMovePos = matchCtx.movePositions[matchCtx.currentIndex];
+            if (currentMovePos && currentMovePos.move_type === 'checker') {
+                positionStore.set(currentMovePos.position);
+            }
+        }
+    }
+
+    // Enhanced switch with position restore
+    async function handleTabSwitch(tab) {
+        if (tab === activeTab) return;
+        
+        if (tab === 'checker') {
+            await restoreCheckerPosition();
+        }
+        
+        await switchTab(tab);
+    }
+
+    // Handle click in analysis content to toggle between checker and cube
+    function handleContentClick(event) {
+        // Only toggle if both analyses available (MATCH mode)
+        if (!showTabs) return;
+        
+        // Check if clicking on table header (TH) or on a header row
+        const clickedTH = event.target.closest('th');
+        const clickedRow = event.target.closest('tr');
+        const clickedDataRow = clickedRow && clickedRow.parentElement.tagName === 'TBODY' && !clickedTH;
+        
+        // If clicking a sortable checker table header, don't toggle tabs
+        if (clickedTH && clickedTH.closest('.checker-table')) {
+            return;
+        }
+        
+        // Toggle if clicking on header OR anywhere outside data rows
+        if (clickedTH || !clickedDataRow) {
+            // Toggle between checker and cube
+            const newTab = activeTab === 'checker' ? 'cube' : 'checker';
+            handleTabSwitch(newTab);
+        }
+        // If clicking on data row (not header), don't toggle - let the row click handler do its job
+    }
+
+    // Determine if both analyses are available
+    $: hasCheckerAnalysis = analysisData && analysisData.checkerAnalysis && 
+                            analysisData.checkerAnalysis.moves && 
+                            analysisData.checkerAnalysis.moves.length > 0;
+    // For cube analysis in MATCH mode, it must not be null and have actual data
+    // Check both that the object exists and that it has actual analysis content
+    $: hasCubeAnalysis = analysisData && 
+                         analysisData.doublingCubeAnalysis !== null && 
+                         analysisData.doublingCubeAnalysis !== undefined && 
+                         typeof analysisData.doublingCubeAnalysis === 'object' &&
+                         (analysisData.doublingCubeAnalysis.bestCubeAction || 
+                          analysisData.doublingCubeAnalysis.cubefulNoDoubleEquity !== undefined);
+    
+    // Build the list of cube analyses to display (may have multiple from different engines)
+    // Sort so XG analysis appears first, then GNUbg, then others
+    $: cubeAnalysesList = (() => {
+        if (!analysisData) return [];
+        let list = [];
+        if (analysisData.allCubeAnalyses && analysisData.allCubeAnalyses.length > 0) {
+            list = [...analysisData.allCubeAnalyses];
+        } else if (analysisData.doublingCubeAnalysis) {
+            list = [analysisData.doublingCubeAnalysis];
+        }
+        // Sort by engine priority: XG first, GNUbg second, others last
+        const enginePriority = (engine) => {
+            const e = (engine || '').toLowerCase();
+            if (e === 'xg') return 0;
+            if (e === 'gnubg') return 1;
+            return 2;
+        };
+        list.sort((a, b) => enginePriority(a.analysisEngine) - enginePriority(b.analysisEngine));
+        return list;
+    })();
+    // Check if current position is the first position of a game (no cube decision possible)
+    // First position can be move_number 0 or 1
+    $: isFirstPositionOfGame = matchCtx.isMatchMode && 
+                                matchCtx.movePositions.length > 0 && 
+                                (matchCtx.movePositions[matchCtx.currentIndex]?.move_number === 0 ||
+                                 matchCtx.movePositions[matchCtx.currentIndex]?.move_number === 1);
+    // Only show tabs in MATCH mode where checker and cube are separate positions
+    // BUT not on the first position of a game (cube decision not possible)
+    $: showTabs = hasCheckerAnalysis && hasCubeAnalysis && matchCtx.isMatchMode && !isFirstPositionOfGame;
+</script>
+
+<section class="analysis-panel" role="dialog" aria-modal="true" id="analysisPanel" tabindex="-1" on:keydown={handleKeyDown}>
+        <div class="analysis-content" on:click={handleContentClick} on:keydown={() => {}} role="button" tabindex="-1">
+            {#if (activeTab === 'cube' || (!showTabs && analysisData.analysisType === 'DoublingCube')) && cubeAnalysesList.length > 0}
+                {#each cubeAnalysesList as cubeAnalysis, cubeIdx}
+                    <div class="tables-container" class:multi-engine-cube={cubeAnalysesList.length > 1}>
+                        <table class="left-table">
+                            <tbody>
+                                <tr>
+                                    <th></th>
+                                    <th>P</th>
+                                    <th>O</th>
+                                </tr>
+                                <tr>
+                                    <td>W</td>
+                                    <td>{(cubeAnalysis.playerWinChances || 0).toFixed(2)}</td>
+                                    <td>{(cubeAnalysis.opponentWinChances || 0).toFixed(2)}</td>
+                                </tr>
+                                <tr>
+                                    <td>G</td>
+                                    <td>{(cubeAnalysis.playerGammonChances || 0).toFixed(2)}</td>
+                                    <td>{(cubeAnalysis.opponentGammonChances || 0).toFixed(2)}</td>
+                                </tr>
+                                <tr>
+                                    <td>B</td>
+                                    <td>{(cubeAnalysis.playerBackgammonChances || 0).toFixed(2)}</td>
+                                    <td>{(cubeAnalysis.opponentBackgammonChances || 0).toFixed(2)}</td>
+                                </tr>
+                                <tr>
+                                    <td>ND Eq</td>
+                                    <td colspan="2">{formatEquity(cubeAnalysis.cubelessNoDoubleEquity || 0)}</td>
+                                </tr>
+                                <tr>
+                                    <td>D Eq</td>
+                                    <td colspan="2">{formatEquity(cubeAnalysis.cubelessDoubleEquity || 0)}</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                        <table class="right-table">
+                            <tbody>
+                                <tr>
+                                    <th>Decision</th>
+                                    <th>Equity</th>
+                                    <th>Error</th>
+                                </tr>
+                                <tr class:played={isPlayedCubeAction('No Double')}>
+                                    <td>{getDecisionLabel('No Double')}</td>
+                                    <td>{formatEquity(cubeAnalysis.cubefulNoDoubleEquity || 0)}</td>
+                                    <td>{formatEquity(cubeAnalysis.cubefulNoDoubleError || 0)}</td>
+                                </tr>
+                                <tr class:played={isPlayedCubeAction('Double') && isPlayedCubeAction('Take')}>
+                                    <td>{getDecisionLabel('Double/Take')}</td>
+                                    <td>{formatEquity(cubeAnalysis.cubefulDoubleTakeEquity || 0)}</td>
+                                    <td>{formatEquity(cubeAnalysis.cubefulDoubleTakeError || 0)}</td>
+                                </tr>
+                                <tr class:played={isPlayedCubeAction('Double') && isPlayedCubeAction('Pass')}>
+                                    <td>{getDecisionLabel('Double/Pass')}</td>
+                                    <td>{formatEquity(cubeAnalysis.cubefulDoublePassEquity || 0)}</td>
+                                    <td>{formatEquity(cubeAnalysis.cubefulDoublePassError || 0)}</td>
+                                </tr>
+                                <tr class="best-action-row {cubeAnalysis.bestCubeAction && cubeAnalysis.bestCubeAction.includes('ダブル') ? 'japanese-text' : ''}">
+                                    <td>Best Action</td>
+                                    <td colspan="2">{cubeAnalysis.bestCubeAction || ''}</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                        <table class="info-table">
+                            <tbody>
+                                <tr>
+                                    <th>Analysis Depth</th>
+                                    <td>{cubeAnalysis.analysisDepth}</td>
+                                </tr>
+                                <tr>
+                                    <th>Engine</th>
+                                    <td>{cubeAnalysis.analysisEngine || analysisData.analysisEngineVersion}</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                {/each}
+            {/if}
+
+            {#if (activeTab === 'checker' || (!showTabs && analysisData.analysisType === 'CheckerMove')) && analysisData.checkerAnalysis && analysisData.checkerAnalysis.moves && analysisData.checkerAnalysis.moves.length > 0}
+                <table class="checker-table">
+                    <thead>
+                        <tr>
+                            <th class="sortable" class:active-sort={sortColumn === 'move'} on:click|stopPropagation={() => handleSort('move')}>Move{getSortIndicator('move')}</th>
+                            <th class="sortable" class:active-sort={sortColumn === 'equity'} on:click|stopPropagation={() => handleSort('equity')}>Equity</th>
+                            <th class="sortable" class:active-sort={sortColumn === 'error'} on:click|stopPropagation={() => handleSort('error')}>Error{getSortIndicator('error')}</th>
+                            <th class="sortable" class:active-sort={sortColumn === 'pw'} on:click|stopPropagation={() => handleSort('pw')}>P W{getSortIndicator('pw')}</th>
+                            <th class="sortable" class:active-sort={sortColumn === 'pg'} on:click|stopPropagation={() => handleSort('pg')}>P G{getSortIndicator('pg')}</th>
+                            <th class="sortable" class:active-sort={sortColumn === 'pb'} on:click|stopPropagation={() => handleSort('pb')}>P B{getSortIndicator('pb')}</th>
+                            <th class="sortable" class:active-sort={sortColumn === 'ow'} on:click|stopPropagation={() => handleSort('ow')}>O W{getSortIndicator('ow')}</th>
+                            <th class="sortable" class:active-sort={sortColumn === 'og'} on:click|stopPropagation={() => handleSort('og')}>O G{getSortIndicator('og')}</th>
+                            <th class="sortable" class:active-sort={sortColumn === 'ob'} on:click|stopPropagation={() => handleSort('ob')}>O B{getSortIndicator('ob')}</th>
+                            <th class="sortable" class:active-sort={sortColumn === 'depth'} on:click|stopPropagation={() => handleSort('depth')}>Depth{getSortIndicator('depth')}</th>
+                            <th class="sortable" class:active-sort={sortColumn === 'engine'} on:click|stopPropagation={() => handleSort('engine')}>Engine{getSortIndicator('engine')}</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {#each sortedMoves as move}
+                            <tr 
+                                class:selected={$selectedMoveStore === move.move}
+                                class:played={isPlayedMove(move)}
+                                on:click={() => handleMoveRowClick(move)}
+                            >
+                                <td>{move.move}</td>
+                                <td>{formatEquity(move.equity || 0)}</td>
+                                <td>{formatEquity(move.equityError || 0)}</td>
+                                <td>{(move.playerWinChance || 0).toFixed(2)}</td>
+                                <td>{(move.playerGammonChance || 0).toFixed(2)}</td>
+                                <td>{(move.playerBackgammonChance || 0).toFixed(2)}</td>
+                                <td>{(move.opponentWinChance || 0).toFixed(2)}</td>
+                                <td>{(move.opponentGammonChance || 0).toFixed(2)}</td>
+                                <td>{(move.opponentBackgammonChance || 0).toFixed(2)}</td>
+                                <td>{move.analysisDepth}</td>
+                                <td>{move.analysisEngine || ''}</td>
+                            </tr>
+                        {/each}
+                    </tbody>
+                </table>
+            {/if}
+        </div>
+    </section>
+
+<style>
+    .analysis-panel {
+        width: 100%;
+        height: 100%;
+        overflow-y: auto;
+        background-color: white;
+        padding: 10px;
+        box-sizing: border-box;
+        outline: none;
+        resize: none;
+    }
+
+    .analysis-content {
+        font-size: 12px; /* Reduce font size */
+        color: black; /* Set text color */
+    }
+
+    .tables-container {
+        display: flex;
+        justify-content: space-between;
+    }
+
+    .cube-engine-header {
+        font-weight: bold;
+        font-size: 12px;
+        color: #444;
+        padding: 2px 4px;
+        margin-top: 4px;
+        border-bottom: 1px solid #ccc;
+    }
+
+    .multi-engine-cube {
+        margin-bottom: 6px;
+    }
+
+    .left-table, .right-table, .info-table {
+        width: 28%; /* Reduce width for the first and third tables */
+        border-collapse: collapse;
+        font-size: 12px; /* Ensure same font size */
+    }
+
+    .left-table th:nth-child(1) {
+        width: 20px; /* Reduce width for the first column */
+    }
+
+    .right-table th:nth-child(1) {
+        width: 60px; /* Reduce width for the decision column */
+    }
+
+    .info-table th, .info-table td {
+        border: 1px solid #ddd;
+        padding: 2px; /* Reduce padding */
+        text-align: center;
+    }
+
+    .checker-table {
+        margin: 0 auto; /* Center the table */
+        width: 100%;
+        font-size: 12px; /* Ensure same font size */
+        border-spacing: 0; /* Remove space between cells */
+    }
+
+    th, td {
+        border: 1px solid #ddd;
+        padding: 2px; /* Reduce padding */
+        text-align: center;
+    }
+
+    th {
+        background-color: #f2f2f2;
+    }
+
+    th:nth-child(1) {
+        width: 150px; /* Sufficiently large for move column */
+    }
+
+    th:nth-child(n+2) {
+        width: 60px; /* Fixed width for equity and percentage columns */
+    }
+
+    .checker-table th:nth-child(1),
+    .checker-table td:nth-child(1) {
+        border-right: 2px solid #ccc; /* More discreet border between move and equity columns */
+    }
+
+    .checker-table th:nth-child(3),
+    .checker-table td:nth-child(3) {
+        border-right: 2px solid #ccc; /* More discreet border between error and PW columns */
+    }
+
+    .checker-table th:nth-child(6),
+    .checker-table td:nth-child(6) {
+        border-right: 2px solid #ccc; /* More discreet border between PB and OW columns */
+    }
+
+    .checker-table th:nth-child(9),
+    .checker-table td:nth-child(9) {
+        border-right: 2px solid #ccc; /* More discreet border between OB and depth columns */
+    }
+
+    .checker-table tr:nth-child(even) {
+        background-color: #fdfdfd; /* More discreet alternating row color */
+    }
+
+    .checker-table tr:nth-child(odd) {
+        background-color: #ffffff; /* More discreet alternating row color */
+    }
+
+    .checker-table tr.selected {
+        background-color: #b3d9ff !important; /* Highlight selected row with light blue */
+        font-weight: bold;
+    }
+
+    .checker-table tr.played {
+        background-color: #fff3cd !important; /* Light yellow background for played move */
+    }
+
+    .checker-table tr.played.selected {
+        background-color: #a3c9ef !important; /* Mixed color when both played and selected */
+    }
+
+    .right-table tr.played {
+        background-color: #fff3cd !important; /* Light yellow background for played cube action */
+    }
+
+    .checker-table tbody tr:hover {
+        background-color: #e6f2ff; /* Light hover effect for move rows */
+    }
+
+    .sortable {
+        cursor: pointer;
+        user-select: none;
+        position: relative;
+    }
+
+    .sortable:hover {
+        background-color: #e0e0e0;
+    }
+
+    .active-sort {
+        background-color: #dde8f0;
+    }
+
+    .best-action-row {
+        font-weight: bold;
+        color: #000000; /* Subtle color change for emphasis */
+    }
+
+    .japanese-text {
+        font-family: 'Noto Sans JP', sans-serif;
+    }
+
+    /* Make analysis content interactive in MATCH mode (toggle on click) */
+    .analysis-content {
+        cursor: default;
+    }
+</style>
+
