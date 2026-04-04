@@ -1,7 +1,9 @@
 <script>
   import { onMount } from 'svelte';
   import { fetchProjection, fetchRuns, fetchFeatureNames, fetchPosition } from '../lib/api.js';
+  import { cachedFetch, invalidateCache } from '../lib/cache.js';
   import Chart from '../components/Chart.svelte';
+  import PositionDetail from '../components/PositionDetail.svelte';
 
   let runs = $state([]);
   let featureNames = $state([]);
@@ -9,6 +11,7 @@
   let loading = $state(false);
   let error = $state(null);
   let selectedPosition = $state(null);
+  let loadingPosition = $state(false);
 
   // Controls
   let method = $state('umap_2d');
@@ -19,7 +22,10 @@
 
   onMount(async () => {
     try {
-      [runs, featureNames] = await Promise.all([fetchRuns(), fetchFeatureNames()]);
+      [runs, featureNames] = await Promise.all([
+        cachedFetch('proj:runs', fetchRuns),
+        cachedFetch('proj:featureNames', fetchFeatureNames),
+      ]);
       if (runs.length > 0) {
         method = runs[0].Method || runs[0].method || 'umap_2d';
       }
@@ -36,7 +42,8 @@
       const opts = { limit };
       if (filterClass !== '') opts.pos_class = parseInt(filterClass);
       if (filterCluster !== '') opts.cluster_id = parseInt(filterCluster);
-      projectionData = await fetchProjection(method, opts);
+      const cacheKey = `proj:data:${method}:${limit}:${filterClass}:${filterCluster}`;
+      projectionData = await cachedFetch(cacheKey, () => fetchProjection(method, opts));
     } catch (e) {
       error = e.message;
     }
@@ -52,7 +59,16 @@
   }
 
   const classColors = ['#f7768e', '#7aa2f7', '#9ece6a'];
-  const clusterColors = ['#7aa2f7', '#9ece6a', '#f7768e', '#ff9e64', '#bb9af7', '#7dcfff', '#e0af68', '#73daca'];
+  const clusterColors = ['#7aa2f7', '#9ece6a', '#f7768e', '#ff9e64', '#bb9af7', '#7dcfff', '#e0af68', '#73daca',
+    '#c0caf5', '#9aa5ce', '#a9b1d6', '#cfc9c2', '#f7768e', '#ff9e64', '#e0af68', '#9ece6a', '#73daca', '#7dcfff', '#7aa2f7', '#bb9af7'];
+
+  let availableClusters = $derived.by(() => {
+    if (!projectionData?.clusters?.length) {
+      const pts = projectionData?.points || [];
+      return [...new Set(pts.map(p => p.cluster_id).filter(c => c != null && c >= 0))].sort((a, b) => a - b);
+    }
+    return projectionData.clusters.map(c => c.cluster_id).sort((a, b) => a - b);
+  });
 
   let chartOption = $derived.by(() => {
     if (!projectionData || !projectionData.points || projectionData.points.length === 0) return null;
@@ -83,10 +99,11 @@
           name: `Cluster ${c}`,
           type: 'scatter',
           data: points.filter(p => (p.cluster_id ?? -1) === c).map(p => [p.x, p.y, p.position_id, c]),
-          symbolSize: 3,
+          symbolSize: 6,
           itemStyle: { color: clusterColors[i % clusterColors.length], opacity: 0.6 },
-          large: true,
-          largeThreshold: 2000,
+          emphasis: { itemStyle: { borderColor: '#fff', borderWidth: 2 }, scale: 2.5 },
+          large: points.length > 20000,
+          largeThreshold: 20000,
         })),
         grid: { left: 50, right: 20, bottom: 50, top: 40 },
         dataZoom: [
@@ -127,9 +144,10 @@
       series: [{
         type: 'scatter',
         data: points.map((p, i) => [p.x, p.y, p.position_id, vals[i]]),
-        symbolSize: 3,
-        large: true,
-        largeThreshold: 2000,
+        symbolSize: 6,
+        emphasis: { itemStyle: { borderColor: '#fff', borderWidth: 2 }, scale: 2.5 },
+        large: points.length > 20000,
+        largeThreshold: 20000,
       }],
       grid: { left: 50, right: 80, bottom: 30, top: 40 },
       dataZoom: [
@@ -142,11 +160,13 @@
   async function handlePointClick(params) {
     const posId = params.data?.[2];
     if (posId) {
+      loadingPosition = true;
       try {
         selectedPosition = await fetchPosition(posId);
       } catch (e) {
         console.error('Failed to load position:', e);
       }
+      loadingPosition = false;
     }
   }
 
@@ -202,13 +222,13 @@
     Cluster filter
     <select bind:value={filterCluster} onchange={loadProjection}>
       <option value="">All</option>
-      {#each Array.from({length: 8}, (_, i) => i) as c}
+      {#each availableClusters as c}
         <option value={c}>{c}</option>
       {/each}
     </select>
   </label>
 
-  <button class="btn primary" onclick={loadProjection} disabled={loading}>
+  <button class="btn primary" onclick={() => { invalidateCache('proj'); loadProjection(); }} disabled={loading}>
     {loading ? 'Loading…' : 'Refresh'}
   </button>
 </div>
@@ -219,70 +239,67 @@
   </div>
 {/if}
 
-{#if loading}
-  <div class="loading">Loading projection data...</div>
-{:else if chartOption}
-  <Chart option={chartOption} height="600px" onPointClick={handlePointClick} />
-
-  {#if projectionData?.clusters?.length > 0}
-    <div class="card" style="margin-top:16px">
-      <h2>Cluster Summary</h2>
-      <table>
-        <thead>
-          <tr><th>Cluster</th><th>Count</th><th>Centroid X</th><th>Centroid Y</th></tr>
-        </thead>
-        <tbody>
-          {#each projectionData.clusters as c}
-            <tr>
-              <td>{c.cluster_id}</td>
-              <td>{c.count?.toLocaleString()}</td>
-              <td>{c.centroid_x?.toFixed(3)}</td>
-              <td>{c.centroid_y?.toFixed(3)}</td>
-            </tr>
-          {/each}
-        </tbody>
-      </table>
-    </div>
-  {/if}
-{:else}
-  <div class="card">
-    <p style="color:var(--text-muted)">No projection data available. Import data and compute projections first.</p>
-  </div>
-{/if}
-
-{#if selectedPosition}
-  <div class="card" style="margin-top:16px">
-    <h2>Position #{selectedPosition.id}</h2>
-    <div class="stats-grid">
-      <div class="stat-card">
-        <div class="label">Class</div>
-        <div class="value" style="font-size:16px">{classLabels[selectedPosition.pos_class] || selectedPosition.pos_class}</div>
-      </div>
-      <div class="stat-card">
-        <div class="label">Pip X / O</div>
-        <div class="value" style="font-size:16px">{selectedPosition.pip_x} / {selectedPosition.pip_o}</div>
-      </div>
-      <div class="stat-card">
-        <div class="label">Away X / O</div>
-        <div class="value" style="font-size:16px">{selectedPosition.away_x} / {selectedPosition.away_o}</div>
-      </div>
-      <div class="stat-card">
-        <div class="label">Cube</div>
-        <div class="value" style="font-size:16px">2^{selectedPosition.cube_log2} ({['center','X','O'][selectedPosition.cube_owner]})</div>
-      </div>
-      <div class="stat-card">
-        <div class="label">Bar X / O</div>
-        <div class="value" style="font-size:16px">{selectedPosition.bar_x} / {selectedPosition.bar_o}</div>
-      </div>
-      <div class="stat-card">
-        <div class="label">Borne off X / O</div>
-        <div class="value" style="font-size:16px">{selectedPosition.borne_off_x} / {selectedPosition.borne_off_o}</div>
-      </div>
-    </div>
-    {#if selectedPosition.board}
-      <div style="margin-top:12px; font-family:var(--mono); font-size:12px; color:var(--text-muted)">
-        Board: [{selectedPosition.board.join(', ')}]
+<div class="split-layout">
+  <div class="chart-panel">
+    {#if loading}
+      <div class="loading">Loading projection data...</div>
+    {:else if chartOption}
+      <Chart option={chartOption} height="100%" onPointClick={handlePointClick} />
+    {:else}
+      <div class="card">
+        <p style="color:var(--text-muted)">No projection data available. Import data and compute projections first.</p>
       </div>
     {/if}
   </div>
+
+  <div class="detail-panel">
+    {#if loadingPosition}
+      <div class="loading">Loading position...</div>
+    {:else}
+      <PositionDetail position={selectedPosition} />
+    {/if}
+  </div>
+</div>
+
+{#if projectionData?.clusters?.length > 0}
+  <div class="card" style="margin-top:12px">
+    <h2>Cluster Summary</h2>
+    <table>
+      <thead>
+        <tr><th>Cluster</th><th>Count</th><th>Centroid X</th><th>Centroid Y</th></tr>
+      </thead>
+      <tbody>
+        {#each projectionData.clusters as c}
+          <tr>
+            <td>{c.cluster_id}</td>
+            <td>{c.count?.toLocaleString()}</td>
+            <td>{c.centroid_x?.toFixed(3)}</td>
+            <td>{c.centroid_y?.toFixed(3)}</td>
+          </tr>
+        {/each}
+      </tbody>
+    </table>
+  </div>
 {/if}
+
+<style>
+  .split-layout {
+    display: flex;
+    gap: 12px;
+    height: calc(100vh - 180px);
+    min-height: 500px;
+  }
+  .chart-panel {
+    flex: 1;
+    min-width: 0;
+  }
+  .detail-panel {
+    width: 380px;
+    flex-shrink: 0;
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 10px;
+    overflow: hidden;
+  }
+</style>

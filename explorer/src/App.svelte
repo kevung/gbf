@@ -5,7 +5,6 @@
   import Dashboard from './views/Dashboard.svelte';
   import Projection from './views/Projection.svelte';
   import Explorer from './views/Explorer.svelte';
-  import Import from './views/Import.svelte';
   import Help from './views/Help.svelte';
 
   const views = [
@@ -13,7 +12,6 @@
     { id: 'dashboard', label: 'Dashboard', icon: '📊' },
     { id: 'projection', label: 'Projections', icon: '🗺️' },
     { id: 'explorer', label: 'Explorer', icon: '📈' },
-    { id: 'import', label: 'Import', icon: '📥' },
     { id: 'help', label: 'Help', icon: '❓' },
   ];
 
@@ -49,18 +47,26 @@
   </aside>
 
   <main class="main">
-    {#if currentView === 'setup'}
+    <div class="view-pane" class:hidden={currentView !== 'setup'}>
       <Setup />
-    {:else if currentView === 'dashboard'}
-      <Dashboard />
-    {:else if currentView === 'projection'}
-      <Projection />
-    {:else if currentView === 'explorer'}
-      <Explorer />
-    {:else if currentView === 'import'}
-      <Import />
-    {:else if currentView === 'help'}
+    </div>
+    <div class="view-pane" class:hidden={currentView !== 'dashboard'}>
+      {#if hasDB || currentView === 'dashboard'}
+        <Dashboard />
+      {/if}
+    </div>
+    <div class="view-pane" class:hidden={currentView !== 'projection'}>
+      {#if hasDB || currentView === 'projection'}
+        <Projection />
+      {/if}
+    </div>
+    <div class="view-pane" class:hidden={currentView !== 'explorer'}>
+      {#if hasDB || currentView === 'explorer'}
+        <Explorer />
+      {/if}
+    </div>
+    <div class="view-pane" class:hidden={currentView !== 'help'}>
       <Help />
-    {/if}
+    </div>
   </main>
 </div>

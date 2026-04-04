@@ -1,12 +1,16 @@
 <script>
   import { onMount } from 'svelte';
-  import { fetchFeatureSample, fetchFeatureNames } from '../lib/api.js';
+  import { fetchFeatureSample, fetchFeatureNames, fetchPosition } from '../lib/api.js';
+  import { cachedFetch } from '../lib/cache.js';
   import Chart from '../components/Chart.svelte';
+  import PositionDetail from '../components/PositionDetail.svelte';
 
   let featureNames = $state([]);
   let sampleData = $state(null);
   let loading = $state(false);
   let error = $state(null);
+  let selectedPosition = $state(null);
+  let loadingPosition = $state(false);
 
   // Controls
   let featureX = $state('pip_x');
@@ -18,7 +22,7 @@
 
   onMount(async () => {
     try {
-      featureNames = await fetchFeatureNames();
+      featureNames = await cachedFetch('explorer:featureNames', fetchFeatureNames);
       await loadSample();
     } catch (e) {
       error = e.message;
@@ -29,7 +33,7 @@
     loading = true;
     error = null;
     try {
-      sampleData = await fetchFeatureSample(sampleSize);
+      sampleData = await cachedFetch(`explorer:sample:${sampleSize}`, () => fetchFeatureSample(sampleSize));
     } catch (e) {
       error = e.message;
     }
@@ -94,10 +98,11 @@
       },
       series: [{
         type: 'scatter',
-        data: data.map((r, i) => [r[xi], r[yi], vals[i]]),
-        symbolSize: 3,
-        large: true,
-        largeThreshold: 2000,
+        data: data.map((r, i) => [r[xi], r[yi], vals[i], sampleData.ids?.[i]]),
+        symbolSize: 6,
+        emphasis: { itemStyle: { borderColor: '#fff', borderWidth: 2 }, scale: 2.5 },
+        large: data.length > 20000,
+        largeThreshold: 20000,
       }],
       grid: { left: 60, right: 80, bottom: 50, top: 40 },
       dataZoom: [
@@ -122,6 +127,8 @@
       const b = Math.min(Math.floor((v - min) / step), bins - 1);
       counts[b]++;
     }
+    const total = values.length;
+    const pcts = counts.map(c => +(c / total * 100).toFixed(2));
 
     return {
       backgroundColor: 'transparent',
@@ -134,7 +141,7 @@
         trigger: 'axis',
         formatter: (params) => {
           const d = params[0];
-          return `${d.name}<br/>Count: ${d.value}`;
+          return `${d.name}<br/>${d.value}%<br/>Count: ${counts[d.dataIndex]}`;
         },
       },
       xAxis: {
@@ -149,14 +156,14 @@
       },
       yAxis: {
         type: 'value',
-        name: 'Count',
+        name: '%',
         nameTextStyle: { color: '#c0caf5' },
         axisLabel: { color: '#565f89' },
         splitLine: { lineStyle: { color: '#3b4261' } },
       },
       series: [{
         type: 'bar',
-        data: counts,
+        data: pcts,
         itemStyle: { color: '#7aa2f7' },
       }],
       grid: { left: 60, right: 20, bottom: 60, top: 40 },
@@ -289,6 +296,21 @@
     chartType === 'boxplot' ? boxOption :
     chartType === 'correlation' ? corrOption : null
   );
+
+  // Only the scatter chart supports point clicks (it carries posID in data[3])
+  let chartClickable = $derived(chartType === 'scatter');
+
+  async function handlePointClick(params) {
+    const posId = params.data?.[3];
+    if (!posId) return;
+    loadingPosition = true;
+    try {
+      selectedPosition = await fetchPosition(posId);
+    } catch (e) {
+      console.error('Failed to load position:', e);
+    }
+    loadingPosition = false;
+  }
 </script>
 
 <div class="controls">
@@ -364,12 +386,53 @@
   </div>
 {/if}
 
-{#if loading}
-  <div class="loading">Loading feature data...</div>
-{:else if activeOption}
-  <Chart option={activeOption} height="600px" />
-{:else}
-  <div class="card">
-    <p style="color:var(--text-muted)">No data to display. Import positions first or adjust chart settings.</p>
+<div class="split-layout" class:has-detail={chartClickable}>
+  <div class="chart-panel">
+    {#if loading}
+      <div class="loading">Loading feature data...</div>
+    {:else if activeOption}
+      <Chart option={activeOption} height="100%" onPointClick={chartClickable ? handlePointClick : null} />
+    {:else}
+      <div class="card">
+        <p style="color:var(--text-muted)">No data to display. Import positions first or adjust chart settings.</p>
+      </div>
+    {/if}
   </div>
-{/if}
+
+  {#if chartClickable}
+    <div class="detail-panel">
+      {#if loadingPosition}
+        <div class="loading">Loading position...</div>
+      {:else}
+        <PositionDetail position={selectedPosition} />
+      {/if}
+    </div>
+  {/if}
+</div>
+
+<style>
+  .split-layout {
+    height: calc(100vh - 180px);
+    min-height: 500px;
+  }
+  .split-layout.has-detail {
+    display: flex;
+    gap: 12px;
+  }
+  .split-layout:not(.has-detail) .chart-panel {
+    height: 100%;
+  }
+  .chart-panel {
+    flex: 1;
+    min-width: 0;
+  }
+  .detail-panel {
+    width: 380px;
+    flex-shrink: 0;
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 10px;
+    overflow: hidden;
+  }
+</style>

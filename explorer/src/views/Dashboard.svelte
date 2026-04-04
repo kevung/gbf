@@ -1,6 +1,7 @@
 <script>
   import { onMount } from 'svelte';
   import { fetchStats, formatNumber } from '../lib/api.js';
+  import { cachedFetch } from '../lib/cache.js';
   import Chart from '../components/Chart.svelte';
 
   let stats = $state(null);
@@ -8,7 +9,7 @@
 
   onMount(async () => {
     try {
-      stats = await fetchStats();
+      stats = await cachedFetch('dashboard:stats', fetchStats);
     } catch (e) {
       error = e.message;
     }
@@ -17,14 +18,14 @@
   let classChartOption = $derived(stats ? {
     backgroundColor: 'transparent',
     title: { text: 'Position Classes', left: 'center', textStyle: { color: '#c0caf5', fontSize: 14 } },
-    tooltip: { trigger: 'item', formatter: '{b}: {c} ({d}%)' },
+    tooltip: { trigger: 'item', formatter: '{b}: {d}%<br/>Count: {c}' },
     series: [{
       type: 'pie',
       radius: ['40%', '70%'],
       data: Object.entries(stats.class_distribution).map(([k, v]) => ({
         name: k, value: v,
       })),
-      label: { color: '#c0caf5' },
+      label: { formatter: '{b}: {d}%', color: '#c0caf5' },
       itemStyle: {
         borderColor: '#1a1b26',
         borderWidth: 2,
@@ -33,34 +34,27 @@
     color: ['#f7768e', '#7aa2f7', '#9ece6a'],
   } : null);
 
-  let scoreChartOption = $derived(stats && stats.score_distribution.length > 0 ? {
-    backgroundColor: 'transparent',
-    title: { text: 'Score Distribution (top 20)', left: 'center', textStyle: { color: '#c0caf5', fontSize: 14 } },
-    tooltip: {
-      trigger: 'axis',
-      formatter: (params) => {
-        const d = params[0];
-        return `${d.name}<br/>Count: ${d.value.toLocaleString()}`;
-      },
-    },
-    xAxis: {
-      type: 'category',
-      data: stats.score_distribution.map(d => `${d.away_x}-${d.away_o}`),
-      axisLabel: { color: '#565f89', fontSize: 11, rotate: 45 },
-      axisLine: { lineStyle: { color: '#3b4261' } },
-    },
-    yAxis: {
-      type: 'value',
-      axisLabel: { color: '#565f89', fontSize: 11 },
-      splitLine: { lineStyle: { color: '#3b4261' } },
-    },
-    series: [{
-      type: 'bar',
-      data: stats.score_distribution.map(d => d.count),
-      itemStyle: { color: '#7aa2f7' },
-    }],
-    grid: { left: 60, right: 20, bottom: 60, top: 40 },
-  } : null);
+  let scoreChartOption = null; // replaced by heatmap table
+
+  function buildHeatmap(stats) {
+    const dist = stats?.score_distribution;
+    if (!dist?.length) return null;
+    const total = dist.reduce((s, d) => s + d.count, 0);
+    if (total === 0) return null;
+    const xVals = [...new Set(dist.map(d => d.away_x))].sort((a, b) => a - b);
+    const oVals = [...new Set(dist.map(d => d.away_o))].sort((a, b) => a - b);
+    const lookup = new Map(dist.map(d => [`${d.away_x}:${d.away_o}`, d]));
+    const maxCount = Math.max(...dist.map(d => d.count));
+    return { xVals, oVals, lookup, total, maxCount };
+  }
+
+  function cellStyle(entry, maxCount) {
+    if (!entry) return '';
+    const t = entry.count / maxCount;
+    return `background:rgba(122,162,247,${(0.08 + t * 0.72).toFixed(3)})`;
+  }
+
+  let heatmap = $derived(buildHeatmap(stats));
 
   let runsData = $derived(stats ? stats.projection_runs : []);
 </script>
@@ -106,9 +100,39 @@
         <Chart option={classChartOption} height="300px" />
       </div>
     {/if}
-    {#if scoreChartOption}
-      <div class="card">
-        <Chart option={scoreChartOption} height="300px" />
+    {#if heatmap}
+      <div class="card heatmap-card">
+        <h2>Score Distribution</h2>
+        <p class="hm-subtitle">% of positions (count) — rows: away X ↓, columns: away O →</p>
+        <div class="heatmap-wrap">
+          <table class="heatmap">
+            <thead>
+              <tr>
+                <th class="corner">X \ O</th>
+                {#each heatmap.oVals as o}
+                  <th class="col-hdr">{o}</th>
+                {/each}
+              </tr>
+            </thead>
+            <tbody>
+              {#each heatmap.xVals as x}
+                <tr>
+                  <th class="row-hdr">{x}</th>
+                  {#each heatmap.oVals as o}
+                    {@const entry = heatmap.lookup.get(`${x}:${o}`)}
+                    <td style={cellStyle(entry, heatmap.maxCount)}
+                        title="away X={x}, away O={o}: {entry?.count ?? 0} positions">
+                      {#if entry}
+                        <span class="pct">{(entry.count / heatmap.total * 100).toFixed(1)}%</span>
+                        <span class="cnt">({formatNumber(entry.count)})</span>
+                      {/if}
+                    </td>
+                  {/each}
+                </tr>
+              {/each}
+            </tbody>
+          </table>
+        </div>
       </div>
     {/if}
   </div>
@@ -141,3 +165,70 @@
     </div>
   {/if}
 {/if}
+
+<style>
+  .heatmap-card {
+    overflow: hidden;
+  }
+
+  .hm-subtitle {
+    font-size: 12px;
+    color: var(--text-muted);
+    margin: 0 0 10px;
+  }
+
+  .heatmap-wrap {
+    overflow-x: auto;
+  }
+
+  .heatmap {
+    border-collapse: collapse;
+    font-size: 11px;
+    font-family: var(--mono);
+    white-space: nowrap;
+  }
+
+  .heatmap .corner {
+    background: var(--bg);
+    color: var(--text-muted);
+    font-weight: 600;
+    font-size: 10px;
+    padding: 4px 8px;
+    text-align: center;
+    border: 1px solid var(--border);
+    min-width: 44px;
+  }
+
+  .heatmap .col-hdr,
+  .heatmap .row-hdr {
+    background: var(--bg);
+    color: var(--accent);
+    font-weight: 700;
+    padding: 4px 6px;
+    text-align: center;
+    border: 1px solid var(--border);
+    min-width: 44px;
+  }
+
+  .heatmap td {
+    padding: 3px 6px;
+    border: 1px solid var(--border);
+    text-align: center;
+    min-width: 72px;
+    vertical-align: top;
+    cursor: default;
+  }
+
+  .heatmap td .pct {
+    display: block;
+    font-weight: 700;
+    color: var(--text);
+    font-size: 11px;
+  }
+
+  .heatmap td .cnt {
+    display: block;
+    color: var(--text-muted);
+    font-size: 10px;
+  }
+</style>

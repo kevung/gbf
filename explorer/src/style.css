@@ -106,6 +106,13 @@ body {
   padding: 24px;
 }
 
+.view-pane {
+  height: 100%;
+}
+.view-pane.hidden {
+  display: none;
+}
+
 /* Cards */
 .card {
   background: var(--bg-surface);

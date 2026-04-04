@@ -30,9 +30,12 @@ export function setBMAB(path) {
   return post('/api/config/bmab', { path });
 }
 
-export function browseDir(path = '') {
-  const params = path ? `?path=${encodeURIComponent(path)}` : '';
-  return get(`/api/config/browse${params}`);
+export function browseDir(path = '', mode = '') {
+  const params = new URLSearchParams();
+  if (path) params.set('path', path);
+  if (mode) params.set('mode', mode);
+  const qs = params.toString();
+  return get(`/api/config/browse${qs ? '?' + qs : ''}`);
 }
 
 // ── Stats / Features ─────────────────────────────────────────────────────────
@@ -80,6 +83,14 @@ export function startImport(proportion = 0.01, batchSize = 100) {
   return post('/api/import/start', { proportion, batch_size: batchSize });
 }
 
+export function fetchImportStatus() {
+  return get('/api/import/status');
+}
+
+export function cancelImport() {
+  return post('/api/import/cancel', {});
+}
+
 export function subscribeImportProgress(onEvent, onDone) {
   const source = new EventSource(BASE + '/api/import/progress');
   source.onmessage = (e) => {
@@ -99,8 +110,22 @@ export function subscribeImportProgress(onEvent, onDone) {
 
 // ── Projection Compute ──────────────────────────────────────────────────────
 
-export function startProjectionCompute(method = 'pca_2d', k = 8, sampleSize = 0) {
-  return post('/api/projection/compute', { method, k, sample_size: sampleSize });
+export function startProjectionCompute(params = {}) {
+  return post('/api/projection/compute', {
+    method: params.method || 'pca_2d',
+    k: params.k || 8,
+    sample_size: params.sampleSize || 0,
+    cluster_method: params.clusterMethod || 'kmeans',
+    perplexity: params.perplexity || 30,
+    tsne_iter: params.tsneIter || 1000,
+    hdbscan_min_size: params.hdbscanMinSize || 100,
+    hdbscan_min_sample: params.hdbscanMinSample || 50,
+    feature_indices: params.featureIndices || null,
+  });
+}
+
+export function fetchProjectionStatus() {
+  return get('/api/projection/status');
 }
 
 export function subscribeProjectionProgress(onEvent, onDone) {
