@@ -902,3 +902,111 @@ func (q txQuerier) QueryRow(ctx context.Context, sql string, args ...any) pgx.Ro
 func (q txQuerier) Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error) {
 	return q.tx.Query(ctx, sql, args...)
 }
+
+// ── Tile methods (M10.4) ─────────────────────────────────────────────────────
+
+// InsertTileBatch inserts a batch of pre-computed slippy-map tiles, replacing
+// any existing tile with the same (run_id, zoom, tile_x, tile_y).
+func (s *PGStore) InsertTileBatch(ctx context.Context, tiles []gbf.Tile) error {
+	for _, t := range tiles {
+		_, err := s.conn().Exec(ctx, `
+			INSERT INTO projection_tiles (run_id, zoom, tile_x, tile_y, n_points, data)
+			VALUES ($1, $2, $3, $4, $5, $6)
+			ON CONFLICT (run_id, zoom, tile_x, tile_y) DO UPDATE
+			SET n_points = EXCLUDED.n_points, data = EXCLUDED.data`,
+			t.RunID, t.Zoom, t.TileX, t.TileY, t.NPoints, t.Data,
+		)
+		if err != nil {
+			return fmt.Errorf("insert tile z=%d tx=%d ty=%d: %w", t.Zoom, t.TileX, t.TileY, err)
+		}
+	}
+	return nil
+}
+
+// QueryTile returns the gzipped JSON payload for a single tile, or (nil, nil) if empty.
+func (s *PGStore) QueryTile(ctx context.Context, runID int64, zoom, tileX, tileY int) ([]byte, error) {
+	var data []byte
+	err := s.conn().QueryRow(ctx, `
+		SELECT data FROM projection_tiles
+		WHERE run_id=$1 AND zoom=$2 AND tile_x=$3 AND tile_y=$4`,
+		runID, zoom, tileX, tileY,
+	).Scan(&data)
+	if err != nil {
+		if err.Error() == "no rows in result set" {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("query tile: %w", err)
+	}
+	return data, nil
+}
+
+// QueryTileMeta returns tile metadata for the given run. Returns (nil, nil) if none.
+func (s *PGStore) QueryTileMeta(ctx context.Context, runID int64) (*gbf.TileMeta, error) {
+	var meta gbf.TileMeta
+	meta.RunID = runID
+
+	err := s.conn().QueryRow(ctx, `
+		SELECT COALESCE(MIN(zoom),0), COALESCE(MAX(zoom),0),
+		       COUNT(*)::INTEGER, COALESCE(SUM(n_points),0)::INTEGER
+		FROM projection_tiles WHERE run_id=$1`, runID,
+	).Scan(&meta.MinZoom, &meta.MaxZoom, &meta.TileCount, &meta.NPoints)
+	if err != nil {
+		return nil, fmt.Errorf("query tile meta: %w", err)
+	}
+	if meta.TileCount == 0 {
+		return nil, nil
+	}
+
+	var bj *string
+	_ = s.conn().QueryRow(ctx,
+		`SELECT bounds_json FROM projection_runs WHERE id=$1`, runID,
+	).Scan(&bj)
+	if bj != nil {
+		meta.BoundsJSON = *bj
+	}
+	return &meta, nil
+}
+
+// QueryProjectionsByRunID returns all projection points for a specific run.
+func (s *PGStore) QueryProjectionsByRunID(ctx context.Context, runID int64) ([]gbf.ProjectionRow, error) {
+	rows, err := s.conn().Query(ctx, `
+		SELECT pr.position_id, pr.x, pr.y, pr.z, pr.cluster_id,
+		       COALESCE(p.away_x,0), COALESCE(p.away_o,0), COALESCE(p.pos_class,0)
+		FROM projections pr
+		JOIN positions p ON p.id = pr.position_id
+		WHERE pr.run_id = $1`, runID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("query projections by run: %w", err)
+	}
+	defer rows.Close()
+
+	var out []gbf.ProjectionRow
+	for rows.Next() {
+		var r gbf.ProjectionRow
+		var z *float32
+		var cid *int
+		if err := rows.Scan(&r.PositionID, &r.X, &r.Y, &z, &cid,
+			&r.AwayX, &r.AwayO, &r.PosClass); err != nil {
+			return nil, fmt.Errorf("scan projection row: %w", err)
+		}
+		r.Z = z
+		if cid != nil {
+			r.ClusterID = cid
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// GCProjectionTiles deletes tiles whose projection run is no longer active.
+func (s *PGStore) GCProjectionTiles(ctx context.Context) error {
+	_, err := s.pool.Exec(ctx, `
+		DELETE FROM projection_tiles
+		WHERE run_id NOT IN (SELECT id FROM projection_runs WHERE is_active=TRUE)`)
+	if err != nil {
+		return fmt.Errorf("gc projection tiles: %w", err)
+	}
+	return nil
+}
+

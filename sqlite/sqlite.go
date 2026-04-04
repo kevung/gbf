@@ -928,3 +928,115 @@ func nullableText(s string) any {
 	}
 	return s
 }
+
+// ── Tile methods (M10.4) ─────────────────────────────────────────────────────
+
+// InsertTileBatch inserts a batch of pre-computed slippy-map tiles.
+// Uses INSERT OR REPLACE to allow rebuilding tiles for the same run.
+func (s *SQLiteStore) InsertTileBatch(ctx context.Context, tiles []gbf.Tile) error {
+	for _, t := range tiles {
+		_, err := s.conn().ExecContext(ctx, `
+			INSERT OR REPLACE INTO projection_tiles
+				(run_id, zoom, tile_x, tile_y, n_points, data)
+			VALUES (?, ?, ?, ?, ?, ?)`,
+			t.RunID, t.Zoom, t.TileX, t.TileY, t.NPoints, t.Data,
+		)
+		if err != nil {
+			return fmt.Errorf("insert tile z=%d tx=%d ty=%d: %w", t.Zoom, t.TileX, t.TileY, err)
+		}
+	}
+	return nil
+}
+
+// QueryTile returns the gzipped JSON payload for a single tile, or (nil, nil) if empty.
+func (s *SQLiteStore) QueryTile(ctx context.Context, runID int64, zoom, tileX, tileY int) ([]byte, error) {
+	var data []byte
+	err := s.conn().QueryRowContext(ctx, `
+		SELECT data FROM projection_tiles
+		WHERE run_id=? AND zoom=? AND tile_x=? AND tile_y=?`,
+		runID, zoom, tileX, tileY,
+	).Scan(&data)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("query tile: %w", err)
+	}
+	return data, nil
+}
+
+// QueryTileMeta returns tile metadata (zoom range, tile count, n_points, bounds)
+// for the given run. Returns (nil, nil) if no tiles exist.
+func (s *SQLiteStore) QueryTileMeta(ctx context.Context, runID int64) (*gbf.TileMeta, error) {
+	var meta gbf.TileMeta
+	meta.RunID = runID
+
+	err := s.conn().QueryRowContext(ctx, `
+		SELECT COALESCE(MIN(zoom),0), COALESCE(MAX(zoom),0),
+		       COUNT(*), COALESCE(SUM(n_points),0)
+		FROM projection_tiles WHERE run_id=?`, runID,
+	).Scan(&meta.MinZoom, &meta.MaxZoom, &meta.TileCount, &meta.NPoints)
+	if err != nil {
+		return nil, fmt.Errorf("query tile meta: %w", err)
+	}
+	if meta.TileCount == 0 {
+		return nil, nil
+	}
+
+	var bj sql.NullString
+	_ = s.conn().QueryRowContext(ctx,
+		`SELECT bounds_json FROM projection_runs WHERE id=?`, runID,
+	).Scan(&bj)
+	if bj.Valid {
+		meta.BoundsJSON = bj.String
+	}
+	return &meta, nil
+}
+
+// QueryProjectionsByRunID returns all projection points for a specific run.
+func (s *SQLiteStore) QueryProjectionsByRunID(ctx context.Context, runID int64) ([]gbf.ProjectionRow, error) {
+	rows, err := s.conn().QueryContext(ctx, `
+		SELECT pr.position_id, pr.x, pr.y, pr.z, pr.cluster_id,
+		       COALESCE(p.away_x,0), COALESCE(p.away_o,0), COALESCE(p.pos_class,0)
+		FROM projections pr
+		JOIN positions p ON p.id = pr.position_id
+		WHERE pr.run_id = ?`, runID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("query projections by run: %w", err)
+	}
+	defer rows.Close()
+
+	var out []gbf.ProjectionRow
+	for rows.Next() {
+		var r gbf.ProjectionRow
+		var z sql.NullFloat64
+		var cid sql.NullInt64
+		if err := rows.Scan(&r.PositionID, &r.X, &r.Y, &z, &cid,
+			&r.AwayX, &r.AwayO, &r.PosClass); err != nil {
+			return nil, fmt.Errorf("scan projection row: %w", err)
+		}
+		if z.Valid {
+			f32 := float32(z.Float64)
+			r.Z = &f32
+		}
+		if cid.Valid {
+			v := int(cid.Int64)
+			r.ClusterID = &v
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// GCProjectionTiles deletes tiles whose projection run is no longer active.
+func (s *SQLiteStore) GCProjectionTiles(ctx context.Context) error {
+	_, err := s.db.ExecContext(ctx, `
+		DELETE FROM projection_tiles
+		WHERE run_id NOT IN (SELECT id FROM projection_runs WHERE is_active=1)`)
+	if err != nil {
+		return fmt.Errorf("gc projection tiles: %w", err)
+	}
+	return nil
+}
+

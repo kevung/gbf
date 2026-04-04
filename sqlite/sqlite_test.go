@@ -48,7 +48,7 @@ func TestLifecycle(t *testing.T) {
 		tables = append(tables, name)
 	}
 
-	want := []string{"analyses", "games", "matches", "moves", "positions", "projection_runs", "projections"}
+	want := []string{"analyses", "games", "matches", "moves", "positions", "projection_runs", "projection_tiles", "projections"}
 	if len(tables) != len(want) {
 		t.Fatalf("got tables %v, want %v", tables, want)
 	}

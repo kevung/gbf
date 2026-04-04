@@ -195,6 +195,25 @@ type Store interface {
 	// active run of the given method and lod.
 	QueryClusterSummary(ctx context.Context, method string, lod int) ([]ClusterSummary, error)
 
+	// ── Tiles (M10.4) ────────────────────────────────────────────────────
+
+	// InsertTileBatch inserts a batch of pre-computed slippy-map tiles.
+	InsertTileBatch(ctx context.Context, tiles []Tile) error
+
+	// QueryTile returns the gzipped JSON payload for tile (zoom, tileX, tileY)
+	// in the given run, or (nil, nil) if the tile does not exist (empty).
+	QueryTile(ctx context.Context, runID int64, zoom, tileX, tileY int) ([]byte, error)
+
+	// QueryTileMeta returns zoom range, tile count, and bounds for a run.
+	// Returns (nil, nil) if no tiles exist for the run.
+	QueryTileMeta(ctx context.Context, runID int64) (*TileMeta, error)
+
+	// QueryProjectionsByRunID returns all projection points for a specific run.
+	QueryProjectionsByRunID(ctx context.Context, runID int64) ([]ProjectionRow, error)
+
+	// GCProjectionTiles deletes tiles whose projection run is no longer active.
+	GCProjectionTiles(ctx context.Context) error
+
 	// ── Lifecycle ────────────────────────────────────────────────────────
 
 	// Close releases the store's resources.
@@ -255,4 +274,25 @@ type ClusterSummary struct {
 	Count     int     `json:"count"`
 	CentroidX float64 `json:"centroid_x"`
 	CentroidY float64 `json:"centroid_y"`
+}
+
+// Tile is a pre-computed slippy-map tile for a projection run.
+// Data holds gzipped JSON of []TilePoint.
+type Tile struct {
+	RunID   int64
+	Zoom    int
+	TileX   int
+	TileY   int
+	NPoints int
+	Data    []byte // gzipped JSON [{id,x,y,c,pc}, ...]
+}
+
+// TileMeta summarises the tile coverage for a projection run.
+type TileMeta struct {
+	RunID      int64  `json:"run_id"`
+	MinZoom    int    `json:"min_zoom"`
+	MaxZoom    int    `json:"max_zoom"`
+	TileCount  int    `json:"tile_count"`
+	NPoints    int    `json:"n_points"`
+	BoundsJSON string `json:"bounds_json,omitempty"`
 }

@@ -29,6 +29,8 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/viz/clusters", s.handleClusters)
 	mux.HandleFunc("GET /api/viz/position/{id}", s.handlePosition)
 	mux.HandleFunc("GET /api/viz/runs", s.handleRuns)
+	mux.HandleFunc("GET /api/viz/tile/{method}/{lod}/{z}/{x}/{y}", s.handleTile)
+	mux.HandleFunc("GET /api/viz/tilemeta/{method}/{lod}", s.handleTileMeta)
 }
 
 // ── GET /api/viz/projection ──────────────────────────────────────────────────
@@ -432,6 +434,98 @@ func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request) {
 		runs = []gbf.ProjectionRun{}
 	}
 	writeJSON(w, http.StatusOK, runs)
+}
+
+// ── GET /api/viz/tile/{method}/{lod}/{z}/{x}/{y} ─────────────────────────────
+
+// handleTile serves a pre-computed gzipped JSON tile.
+// Responds 204 No Content for empty (non-existent) tiles.
+// Sets Cache-Control headers since tile data is immutable per run.
+func (s *Server) handleTile(w http.ResponseWriter, r *http.Request) {
+	method := r.PathValue("method")
+	lod, err := strconv.Atoi(r.PathValue("lod"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid lod")
+		return
+	}
+	z, err := strconv.Atoi(r.PathValue("z"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid z")
+		return
+	}
+	tx, err := strconv.Atoi(r.PathValue("x"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid x")
+		return
+	}
+	ty, err := strconv.Atoi(r.PathValue("y"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid y")
+		return
+	}
+
+	ctx := r.Context()
+
+	run, err := s.store.ActiveProjectionRun(ctx, method, lod)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if run == nil {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+
+	data, err := s.store.QueryTile(ctx, run.ID, z, tx, ty)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if data == nil {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Content-Encoding", "gzip")
+	w.Header().Set("Cache-Control", "public, max-age=86400")
+	w.WriteHeader(http.StatusOK)
+	w.Write(data)
+}
+
+// ── GET /api/viz/tilemeta/{method}/{lod} ─────────────────────────────────────
+
+// handleTileMeta returns tile coverage metadata (zoom range, tile count, bounds).
+func (s *Server) handleTileMeta(w http.ResponseWriter, r *http.Request) {
+	method := r.PathValue("method")
+	lod, err := strconv.Atoi(r.PathValue("lod"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid lod")
+		return
+	}
+
+	ctx := r.Context()
+
+	run, err := s.store.ActiveProjectionRun(ctx, method, lod)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if run == nil {
+		writeError(w, http.StatusNotFound, "no active projection run")
+		return
+	}
+
+	meta, err := s.store.QueryTileMeta(ctx, run.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if meta == nil {
+		writeError(w, http.StatusNotFound, "no tiles computed for this run")
+		return
+	}
+	writeJSON(w, http.StatusOK, meta)
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────

@@ -119,6 +119,8 @@ func main() {
 	mux.HandleFunc("GET /api/viz/clusters", srv.requireDB(srv.handleVizProxy("clusters")))
 	mux.HandleFunc("GET /api/viz/position/{id}", srv.requireDB(srv.handleVizProxy("position")))
 	mux.HandleFunc("GET /api/viz/runs", srv.requireDB(srv.handleVizProxy("runs")))
+	mux.HandleFunc("GET /api/viz/tile/{method}/{lod}/{z}/{x}/{y}", srv.requireDB(srv.handleVizProxy("tile")))
+	mux.HandleFunc("GET /api/viz/tilemeta/{method}/{lod}", srv.requireDB(srv.handleVizProxy("tilemeta")))
 
 	// Static files — prefer external dir, fall back to embedded.
 	if staticDir == "" {

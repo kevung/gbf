@@ -14,7 +14,7 @@
 | M6 Query API                 | ✅ Complete | 5 Go query methods, Python helper, migration tool |
 | M7 PostgreSQL Backend        | ✅ Complete | PGStore + pgxpool, migration SQLite→PG, concurrency tests (race-clean) |
 | M8 Visualization SaaS        | ✅ Complete | Projection runs, viz API (4 endpoints), import-projections CLI |
-| M10 Performance + LoD + Tiles | 🔄 In progress | M10.0+M10.1 done; M10.2 done (VP-tree + parallel SGD); M10.3 done (LoD system + stratified sampling) |
+| M10 Performance + LoD + Tiles | 🔄 In progress | M10.0+M10.1 done; M10.2 done (VP-tree + parallel SGD); M10.3 done (LoD system + stratified sampling); M10.4 done (tile system) |
 
 ## Overview
 
@@ -289,7 +289,7 @@ fluid rendering.
    CAS, race-clean); VP-tree disabled for 44D UMAP k-NN (high-D ineffective)
 4. ✅ M10.3 — LoD system: 3 levels (5-10K / 50-100K / complete), stratified
    sampling, per-(method, lod) activation, bounds storage
-5. M10.4 — Tile system: slippy map convention, pre-computed gzipped JSON
+5. ✅ M10.4 — Tile system: slippy map convention, pre-computed gzipped JSON
    tiles, LoD→zoom mapping, tile API endpoints
 6. M10.5 — Frontend: deck.gl TileLayer replacing ECharts scatter plot
 7. M10.6 — Import parallelization: fan-out parsing pipeline (target >20K pos/s)

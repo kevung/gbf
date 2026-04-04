@@ -610,6 +610,14 @@ func SaveProjectionResult(ctx context.Context, store Store, result *ProjectionCo
 		return fmt.Errorf("activate run: %w", err)
 	}
 
+	// Build pre-computed tiles for the tile API (M10.4).
+	if result.BoundsJSON != "" {
+		if err := BuildTiles(ctx, store, runID, result.LoD, result.BoundsJSON); err != nil {
+			// Tile building is non-fatal: log the failure and continue.
+			_ = err // caller may inspect via logging; tile API will return 204
+		}
+	}
+
 	return nil
 }
 

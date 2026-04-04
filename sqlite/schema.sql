@@ -123,3 +123,17 @@ CREATE TABLE IF NOT EXISTS projections (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_proj_run_pos  ON projections(run_id, position_id);
 CREATE        INDEX IF NOT EXISTS idx_proj_run      ON projections(run_id);
 CREATE        INDEX IF NOT EXISTS idx_proj_cluster  ON projections(run_id, cluster_id);
+
+-- M10.4: pre-computed slippy-map tiles (gzipped JSON per zoom/tile cell)
+CREATE TABLE IF NOT EXISTS projection_tiles (
+    id       INTEGER PRIMARY KEY,
+    run_id   INTEGER NOT NULL REFERENCES projection_runs(id),
+    zoom     INTEGER NOT NULL,
+    tile_x   INTEGER NOT NULL,
+    tile_y   INTEGER NOT NULL,
+    n_points INTEGER NOT NULL,
+    data     BLOB    NOT NULL,   -- gzipped JSON [{id,x,y,c,pc}, ...]
+    UNIQUE(run_id, zoom, tile_x, tile_y)
+);
+
+CREATE INDEX IF NOT EXISTS idx_tiles_run_zoom ON projection_tiles(run_id, zoom);

@@ -263,7 +263,7 @@ M10.1, M10.3, and M10.6 can proceed in parallel after M10.0.
 - [x] t-SNE pre-allocates qNum (M10.1)
 - [x] Parallel UMAP SGD via edge-chunked goroutines + atomic CAS (M10.2d, race-clean)
 - [x] LoD 0 computes in < 30s on 1.57M position database
-- [ ] Tile API serves pre-computed tiles with cache headers
+- [x] Tile API serves pre-computed tiles with cache headers
 - [ ] deck.gl frontend renders tiles with zoom/pan
 - [ ] Import throughput > 20K pos/s
 - [x] All tests pass (`go test ./... -short -race`)
@@ -329,3 +329,33 @@ Note on VP-tree applicability: the VP-tree in `vptree.go` is general-purpose
 and will be useful for any low-dimensional k-NN query (e.g., future LoD
 projection queries on 2D tiles). For GBF's 44D feature vectors, the
 parallelised heap remains faster.
+
+### M10.4 Implementation Notes (2026-04-05)
+
+**Schema**: `projection_tiles` table added to both SQLite and PG schemas
+(`CREATE TABLE IF NOT EXISTS` — idempotent for existing databases).
+
+**LoD → zoom mapping**:
+- LoD 0: zoom 0–2 (max 16 tiles, overview)
+- LoD 1: zoom 3–5 (max 1024 tiles, medium)
+- LoD 2: zoom 6–8 (max 65536 tiles, full)
+
+**Tile format**: gzipped JSON array of `{id, x, y, c, pc}` where `x/y` are
+normalised to [0,1]² using the run's `bounds_json`, `c` = cluster_id (−1 for
+noise), `pc` = pos_class.
+
+**BuildTiles**: called automatically from `SaveProjectionResult` after
+`ActivateProjectionRun`; non-fatal (tile build failure does not fail import).
+Points binned per zoom level in O(n · zoom_range) with batch inserts of 500.
+GC purges tiles for inactive runs after each build.
+
+**API endpoints** (`viz` package, registered in `RegisterRoutes`):
+- `GET /api/viz/tile/{method}/{lod}/{z}/{x}/{y}` — serves gzip tile, 204 if empty
+- `GET /api/viz/tilemeta/{method}/{lod}` — zoom range, tile count, bounds
+
+**New Store interface methods** (both SQLiteStore and PGStore):
+`InsertTileBatch`, `QueryTile`, `QueryTileMeta`, `QueryProjectionsByRunID`,
+`GCProjectionTiles`.
+
+**Tests**: `tiles_test.go` — 7 tests covering build, content decode, GC,
+empty-tile edge cases.
