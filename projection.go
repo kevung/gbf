@@ -387,8 +387,14 @@ func ComputeProjectionFromStore(ctx context.Context, store Store, cfg Projection
 			NNeighbors:  nNeighbors,
 			MinDist:     minDist,
 			Seed:        cfg.Seed,
-			ProgressFn: func(epoch, maxEpoch int) {
-				progress("computing_umap", epoch*100/maxEpoch)
+			ProgressFn: func(stage string, pct int) {
+				switch stage {
+				case "knn":
+					// kNN is ~70% of total compute time.
+					progress("computing_umap", pct*70/100)
+				case "optimize":
+					progress("computing_umap", 70+pct*30/100)
+				}
 			},
 		})
 		if err != nil {

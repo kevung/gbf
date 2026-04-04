@@ -7,6 +7,7 @@ import (
 	"runtime"
 	"sort"
 	"sync"
+	"sync/atomic"
 )
 
 // ── UMAP (pure Go) ──────────────────────────────────────────────────────────
@@ -29,7 +30,7 @@ type UMAPConfig struct {
 	NEpochs            int     // optimization epochs (0 = auto: 200 if n>10k, else 500)
 	LearningRate       float64 // initial SGD learning rate (default 1.0)
 	Seed               uint64
-	ProgressFn         func(epoch, maxEpoch int)
+	ProgressFn         func(stage string, pct int) // stage: "knn" or "optimize"
 }
 
 // ComputeUMAP runs UMAP on the feature matrix. points is N × D (not modified).
@@ -73,7 +74,7 @@ func ComputeUMAP(points [][]float64, cfg UMAPConfig) (*UMAPResult, error) {
 	}
 
 	// 1. k-nearest neighbors (parallelised brute force).
-	knnIdx, knnDist := umapKNN(points, k, d)
+	knnIdx, knnDist := umapKNN(points, k, d, cfg.ProgressFn)
 
 	// 2. Smooth kNN distances → sigma, rho per point.
 	sigmas, rhos := umapSmoothKNN(knnDist, k)
@@ -105,10 +106,13 @@ func ComputeUMAP(points [][]float64, cfg UMAPConfig) (*UMAPResult, error) {
 
 // ── k-NN (brute-force, parallelised) ────────────────────────────────────────
 
-func umapKNN(points [][]float64, k, dims int) ([][]int, [][]float64) {
+func umapKNN(points [][]float64, k, dims int, progressFn func(string, int)) ([][]int, [][]float64) {
 	n := len(points)
 	knnIdx := make([][]int, n)
 	knnDist := make([][]float64, n)
+
+	var doneCount atomic.Int64
+	var lastPct atomic.Int64
 
 	nWorkers := runtime.NumCPU()
 	if nWorkers > n {
@@ -152,6 +156,15 @@ func umapKNN(points [][]float64, k, dims int) ([][]int, [][]float64) {
 				for j := 0; j < k; j++ {
 					knnIdx[i][j] = order[j]
 					knnDist[i][j] = dist[order[j]]
+				}
+				// Report kNN progress every ~5 percentage points.
+				if progressFn != nil {
+					cnt := doneCount.Add(1)
+					pct := int(cnt * 100 / int64(n))
+					old := int(lastPct.Load())
+					if pct >= old+5 && lastPct.CompareAndSwap(int64(old), int64(pct)) {
+						progressFn("knn", pct)
+					}
 				}
 			}
 		}(start, end)
@@ -578,7 +591,11 @@ func umapOptimize(embedding [][]float64, heads, tails []int, weights []float64,
 		}
 
 		if cfg.ProgressFn != nil && (epoch%10 == 0 || epoch == nEpochs-1) {
-			cfg.ProgressFn(epoch, nEpochs)
+			pct := epoch * 100 / nEpochs
+			if epoch == nEpochs-1 {
+				pct = 100
+			}
+			cfg.ProgressFn("optimize", pct)
 		}
 	}
 }

@@ -193,22 +193,22 @@ func TestUMAPProgressCallback(t *testing.T) {
 		points[i] = []float64{rng.NormFloat64(), rng.NormFloat64()}
 	}
 
-	var maxEpochSeen int
+	var lastOptPct int
 	_, err := ComputeUMAP(points, UMAPConfig{
 		NComponents: 2,
 		NEpochs:     100,
 		Seed:        42,
-		ProgressFn: func(epoch, maxEpoch int) {
-			if maxEpoch > maxEpochSeen {
-				maxEpochSeen = maxEpoch
+		ProgressFn: func(stage string, pct int) {
+			if stage == "optimize" && pct > lastOptPct {
+				lastOptPct = pct
 			}
 		},
 	})
 	if err != nil {
 		t.Fatalf("ComputeUMAP: %v", err)
 	}
-	if maxEpochSeen != 100 {
-		t.Errorf("expected maxEpoch=100, got %d", maxEpochSeen)
+	if lastOptPct != 100 {
+		t.Errorf("expected final optimize pct=100, got %d", lastOptPct)
 	}
 }
 
