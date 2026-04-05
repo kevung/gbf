@@ -9,3 +9,4 @@ data/*.db-wal
 /bin/
 explorer/node_modules/
 explorer/dist/
+*.import.journal

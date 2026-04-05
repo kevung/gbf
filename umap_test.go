@@ -170,6 +170,63 @@ func TestUMAPHighDim(t *testing.T) {
 	}
 }
 
+// TestUMAPHighDimLarge verifies that the PCA pre-reduction path (n>=1000, d>15)
+// produces a meaningful embedding that preserves cluster structure.
+func TestUMAPHighDimLarge(t *testing.T) {
+	rng := rand.New(rand.NewPCG(99, 0))
+	n := 1200 // exceeds the 1000-point threshold that triggers PCA pre-reduction
+	d := 44
+	points := make([][]float64, n)
+	for i := 0; i < n; i++ {
+		points[i] = make([]float64, d)
+		offset := 0.0
+		if i >= n/2 {
+			offset = 6.0
+		}
+		for j := 0; j < d; j++ {
+			points[i][j] = rng.NormFloat64()*0.5 + offset
+		}
+	}
+
+	result, err := ComputeUMAP(points, UMAPConfig{
+		NComponents: 2,
+		NNeighbors:  15,
+		MinDist:     0.1,
+		Seed:        42,
+		NEpochs:     200,
+	})
+	if err != nil {
+		t.Fatalf("ComputeUMAP: %v", err)
+	}
+	if len(result.Embedding) != n {
+		t.Fatalf("expected %d points, got %d", n, len(result.Embedding))
+	}
+	for i, row := range result.Embedding {
+		for c, v := range row {
+			if math.IsNaN(v) || math.IsInf(v, 0) {
+				t.Fatalf("NaN/Inf at point %d dim %d", i, c)
+			}
+		}
+	}
+
+	centroid := func(start, end int) (float64, float64) {
+		var sx, sy float64
+		for i := start; i < end; i++ {
+			sx += result.Embedding[i][0]
+			sy += result.Embedding[i][1]
+		}
+		cnt := float64(end - start)
+		return sx / cnt, sy / cnt
+	}
+	cx1, cy1 := centroid(0, n/2)
+	cx2, cy2 := centroid(n/2, n)
+	dist := math.Sqrt((cx1-cx2)*(cx1-cx2) + (cy1-cy2)*(cy1-cy2))
+	t.Logf("inter-cluster distance = %.3f (PCA pre-reduction path)", dist)
+	if dist < 1.0 {
+		t.Errorf("clusters not separated: distance=%.3f", dist)
+	}
+}
+
 func TestUMAPTinyInput(t *testing.T) {
 	points := [][]float64{{0, 0}, {1, 1}}
 	result, err := ComputeUMAP(points, UMAPConfig{

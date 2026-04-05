@@ -74,8 +74,26 @@ func ComputeUMAP(points [][]float64, cfg UMAPConfig) (*UMAPResult, error) {
 		k = n - 1
 	}
 
-	// 1. k-nearest neighbors (parallelised brute force).
-	knnIdx, knnDist := umapKNN(points, k, d, cfg.ProgressFn)
+	// 1. k-nearest neighbors.
+	// For high-dimensional inputs (d > 15) the VP-tree path in umapKNN is
+	// skipped (triangle-inequality pruning degrades in high dimensions).
+	// Pre-reducing to 10D via PCA re-enables VP-tree and cuts kNN from
+	// O(n²) to O(n log n) with negligible effect on graph quality.
+	knnPoints := points
+	knnDims := d
+	if d > 15 && n >= 1000 {
+		const pcaTargetDims = 10
+		pcaCopy := make([][]float64, n)
+		for i, p := range points {
+			pcaCopy[i] = make([]float64, d)
+			copy(pcaCopy[i], p)
+		}
+		if pca, err := ComputePCA(pcaCopy, pcaTargetDims); err == nil {
+			knnPoints = pca.Embedding
+			knnDims = len(pca.Embedding[0])
+		}
+	}
+	knnIdx, knnDist := umapKNN(knnPoints, k, knnDims, cfg.ProgressFn)
 
 	// 2. Smooth kNN distances → sigma, rho per point.
 	sigmas, rhos := umapSmoothKNN(knnDist, k)
