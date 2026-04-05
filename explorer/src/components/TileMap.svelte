@@ -33,7 +33,7 @@
   // ── State ─────────────────────────────────────────────────────────────────
 
   let canvas;
-  let deck;
+  let deck = $state(null);
   let tileMeta = $state(null);
   let loading = $state(false);
   let error = $state(null);
@@ -192,14 +192,7 @@
     deck.setProps({ layers: [makeLayer(points)] });
   }
 
-  onMount(async () => {
-    // Load tile meta to confirm tiles exist.
-    try {
-      tileMeta = await fetchTileMeta(method, lod);
-    } catch {
-      // No tiles yet — show placeholder.
-    }
-
+  onMount(() => {
     deck = new Deck({
       canvas,
       views: new OrthographicView({ id: 'ortho', controller: true }),
@@ -221,10 +214,6 @@
         }
       },
     });
-
-    if (tileMeta) {
-      await reload();
-    }
   });
 
   onDestroy(() => {
@@ -232,8 +221,12 @@
     deck = null;
   });
 
-  // Reload when method / lod / colorBy changes.
+  // Reload when method / lod changes, or when deck becomes ready.
+  // Tracking `deck` (a $state) ensures this re-runs once deck.gl is
+  // initialized, even if the fetch resolved before onMount ran.
   $effect(() => {
+    if (!deck) return; // wait for deck.gl canvas to be ready
+
     tileCache.clear();
     tileMeta = null;
     points = [];
