@@ -5,6 +5,7 @@
     startImport, fetchImportStatus, cancelImport, subscribeImportProgress,
     startProjectionCompute, fetchProjectionStatus, subscribeProjectionProgress,
   } from '../lib/api.js';
+  import { invalidateCache } from '../lib/cache.js';
 
   // ── Config ────────────────────────────────────────────────────────────────
   let config = $state(null);
@@ -256,7 +257,12 @@
         projUnsub?.();
         projUnsub = subscribeProjectionProgress(
           (evt) => { projEvents = [...projEvents, evt]; },
-          (final) => { projComputing = false; if (final.error) projError = final.error; }
+          (final) => {
+            projComputing = false;
+            if (final.error) { projError = final.error; return; }
+            // Invalidate dashboard stats cache so projection runs appear there too.
+            invalidateCache('dashboard:stats');
+          }
         );
       })
       .catch((e) => { projError = e.message; projComputing = false; });

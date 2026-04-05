@@ -948,13 +948,18 @@ func (s *server) runProjectionCompute(ctx context.Context, req computeRequest) {
 		return
 	}
 
+	clusterLabel := fmt.Sprintf("k-means (k=%d)", cfg.K)
+	if cfg.ClusterMethod == "hdbscan" {
+		clusterLabel = "HDBSCAN"
+	}
+
 	s.projMu.Lock()
 	s.projProgress = append(s.projProgress, projectionEvent{
 		Time:    time.Now(),
 		Stage:   "done",
 		Percent: 100,
 		Done:    true,
-		Message: fmt.Sprintf("PCA + k-means complete: %d points, %d clusters", result.NPoints, cfg.K),
+		Message: fmt.Sprintf("%s + %s complete: %d points", req.Method, clusterLabel, result.NPoints),
 	})
 	s.projDone = true
 	s.projRunning = false

@@ -1,9 +1,10 @@
 <script>
   import { onMount } from 'svelte';
   import { fetchRuns, fetchPosition } from '../lib/api.js';
-  import { cachedFetch } from '../lib/cache.js';
   import TileMap from '../components/TileMap.svelte';
   import PositionDetail from '../components/PositionDetail.svelte';
+
+  let { refreshTrigger = 0 } = $props();
 
   let runs = $state([]);
   let error = $state(null);
@@ -15,15 +16,18 @@
   let colorBy = $state('cluster_id');
   let lod = $state(0);
 
-  onMount(async () => {
-    try {
-      runs = await cachedFetch('proj:runs', fetchRuns);
-      if (runs.length > 0) {
-        method = runs[0].Method || runs[0].method || 'umap_2d';
-      }
-    } catch (e) {
-      error = e.message;
-    }
+  // Re-fetch runs whenever the parent increments refreshTrigger (tab navigation)
+  // or on first mount.
+  $effect(() => {
+    refreshTrigger; // subscribe
+    fetchRuns()
+      .then(r => {
+        runs = r ?? [];
+        if (runs.length > 0) {
+          method = runs[0].Method || runs[0].method || 'umap_2d';
+        }
+      })
+      .catch(e => { error = e.message; });
   });
 
   async function handlePointClick({ position_id }) {

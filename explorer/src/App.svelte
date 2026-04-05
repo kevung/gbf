@@ -17,6 +17,7 @@
 
   let currentView = $state('setup');
   let hasDB = $state(false);
+  let projRefresh = $state(0);
 
   onMount(async () => {
     try {
@@ -37,7 +38,10 @@
       {#each views as v}
         <button
           class:active={currentView === v.id}
-          onclick={() => (currentView = v.id)}
+          onclick={() => {
+            if (v.id === 'projection') projRefresh++;
+            currentView = v.id;
+          }}
         >
           <span class="icon">{v.icon}</span>
           {v.label}
@@ -57,7 +61,7 @@
     </div>
     <div class="view-pane" class:hidden={currentView !== 'projection'}>
       {#if hasDB || currentView === 'projection'}
-        <Projection />
+        <Projection refreshTrigger={projRefresh} />
       {/if}
     </div>
     <div class="view-pane" class:hidden={currentView !== 'explorer'}>
