@@ -148,6 +148,10 @@ export function fetchProjectionStatus() {
   return get('/api/projection/status');
 }
 
+export function rebuildProjectionTiles() {
+  return post('/api/projection/rebuild-tiles', {});
+}
+
 export function subscribeProjectionProgress(onEvent, onDone) {
   const source = new EventSource(BASE + '/api/projection/progress');
   source.onmessage = (e) => {

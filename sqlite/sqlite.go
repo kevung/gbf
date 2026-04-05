@@ -1029,6 +1029,16 @@ func (s *SQLiteStore) QueryProjectionsByRunID(ctx context.Context, runID int64) 
 	return out, rows.Err()
 }
 
+// UpdateProjectionBoundsJSON updates the bounds_json field of a projection run.
+func (s *SQLiteStore) UpdateProjectionBoundsJSON(ctx context.Context, runID int64, boundsJSON string) error {
+	_, err := s.conn().ExecContext(ctx,
+		`UPDATE projection_runs SET bounds_json=? WHERE id=?`, boundsJSON, runID)
+	if err != nil {
+		return fmt.Errorf("update bounds_json: %w", err)
+	}
+	return nil
+}
+
 // GCProjectionTiles deletes tiles whose projection run is no longer active.
 func (s *SQLiteStore) GCProjectionTiles(ctx context.Context) error {
 	_, err := s.db.ExecContext(ctx, `

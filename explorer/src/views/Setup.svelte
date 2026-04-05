@@ -4,6 +4,7 @@
     fetchConfig, setDB, setBMAB, browseDir, formatNumber,
     startImport, fetchImportStatus, cancelImport, subscribeImportProgress,
     startProjectionCompute, fetchProjectionStatus, subscribeProjectionProgress,
+    rebuildProjectionTiles,
   } from '../lib/api.js';
   import { invalidateCache } from '../lib/cache.js';
 
@@ -48,6 +49,9 @@
   let projEvents = $state([]);
   let projError = $state(null);
   let projUnsub = null;
+  let rebuildingTiles = $state(false);
+  let rebuildTilesResult = $state(null);
+  let rebuildTilesError = $state(null);
 
   // Feature selection: all 44 features, user can toggle.
   const ALL_FEATURES = [
@@ -266,6 +270,18 @@
         );
       })
       .catch((e) => { projError = e.message; projComputing = false; });
+  }
+
+  async function handleRebuildTiles() {
+    rebuildTilesResult = null;
+    rebuildTilesError = null;
+    rebuildingTiles = true;
+    try {
+      rebuildTilesResult = await rebuildProjectionTiles();
+    } catch (e) {
+      rebuildTilesError = e.message;
+    }
+    rebuildingTiles = false;
   }
 
   // ── Derived ───────────────────────────────────────────────────────────────
@@ -532,7 +548,25 @@
     {:else}
       <button class="btn" disabled>⏳ Computing…</button>
     {/if}
+    <button class="btn" onclick={handleRebuildTiles}
+      disabled={!config?.has_db || projComputing || rebuildingTiles}
+      style="margin-left:8px;font-size:11px"
+      title="Rebuild tiles for existing projection runs without recomputing">
+      {rebuildingTiles ? '⏳ Rebuilding…' : 'Rebuild tiles'}
+    </button>
   </div>
+
+  {#if rebuildTilesError}
+    <div class="status-badge" style="background:rgba(247,118,142,.1);color:var(--red);border-color:rgba(247,118,142,.3);margin-top:6px">
+      {rebuildTilesError}
+    </div>
+  {:else if rebuildTilesResult}
+    <div class="status-badge ok" style="margin-top:6px">
+      Tiles rebuilt: {rebuildTilesResult.rebuilt} run(s)
+      {rebuildTilesResult.skipped > 0 ? `, ${rebuildTilesResult.skipped} already had tiles` : ''}
+      {rebuildTilesResult.errors?.length > 0 ? ` — ${rebuildTilesResult.errors.length} error(s)` : ''}
+    </div>
+  {/if}
 
   {#if projError}
     <div class="status-badge" style="background:rgba(247,118,142,.1);color:var(--red);border-color:rgba(247,118,142,.3);margin-top:8px">

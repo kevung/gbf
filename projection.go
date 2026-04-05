@@ -620,6 +620,47 @@ func SaveProjectionResult(ctx context.Context, store Store, result *ProjectionCo
 	return nil
 }
 
+// RebuildProjectionTiles rebuilds the pre-computed tile data for an existing
+// active projection run whose tiles are missing or whose bounds_json was not
+// recorded. It computes bounds from the stored projection points, updates the
+// run record, and calls BuildTiles.
+func RebuildProjectionTiles(ctx context.Context, store Store, run *ProjectionRun) error {
+	rows, err := store.QueryProjectionsByRunID(ctx, run.ID)
+	if err != nil {
+		return fmt.Errorf("query projections: %w", err)
+	}
+	if len(rows) == 0 {
+		return fmt.Errorf("no projection points found for run %d", run.ID)
+	}
+
+	// Compute bounds from stored points.
+	minX, maxX := float64(rows[0].X), float64(rows[0].X)
+	minY, maxY := float64(rows[0].Y), float64(rows[0].Y)
+	for _, r := range rows[1:] {
+		x, y := float64(r.X), float64(r.Y)
+		if x < minX {
+			minX = x
+		}
+		if x > maxX {
+			maxX = x
+		}
+		if y < minY {
+			minY = y
+		}
+		if y > maxY {
+			maxY = y
+		}
+	}
+	boundsJSON := fmt.Sprintf(`{"min_x":%.6f,"max_x":%.6f,"min_y":%.6f,"max_y":%.6f}`,
+		minX, maxX, minY, maxY)
+
+	if err := store.UpdateProjectionBoundsJSON(ctx, run.ID, boundsJSON); err != nil {
+		return fmt.Errorf("update bounds: %w", err)
+	}
+
+	return BuildTiles(ctx, store, run.ID, run.LoD, boundsJSON)
+}
+
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
 func dotProduct(a, b []float64) float64 {

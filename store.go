@@ -211,6 +211,11 @@ type Store interface {
 	// QueryProjectionsByRunID returns all projection points for a specific run.
 	QueryProjectionsByRunID(ctx context.Context, runID int64) ([]ProjectionRow, error)
 
+	// UpdateProjectionBoundsJSON updates the bounds_json field of a projection
+	// run. Used when tiles must be rebuilt for a run saved before bounds were
+	// tracked.
+	UpdateProjectionBoundsJSON(ctx context.Context, runID int64, boundsJSON string) error
+
 	// GCProjectionTiles deletes tiles whose projection run is no longer active.
 	GCProjectionTiles(ctx context.Context) error
 

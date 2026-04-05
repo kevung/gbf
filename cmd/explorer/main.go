@@ -111,6 +111,7 @@ func main() {
 
 	// Projection compute API.
 	mux.HandleFunc("POST /api/projection/compute", srv.requireDB(srv.handleProjectionCompute))
+	mux.HandleFunc("POST /api/projection/rebuild-tiles", srv.requireDB(srv.handleRebuildTiles))
 	mux.HandleFunc("GET /api/projection/progress", srv.handleProjectionProgress)
 	mux.HandleFunc("GET /api/projection/status", srv.handleProjectionStatus)
 
@@ -816,6 +817,52 @@ func (s *server) handleProjectionStatus(w http.ResponseWriter, r *http.Request) 
 		"done":        done,
 		"event_count": count,
 		"last_event":  last,
+	})
+}
+
+// handleRebuildTiles rebuilds pre-computed tile data for each active projection
+// run whose tiles are missing. This is needed for runs computed with an older
+// binary that did not store bounds_json or did not build tiles.
+func (s *server) handleRebuildTiles(w http.ResponseWriter, r *http.Request) {
+	s.mu.RLock()
+	store := s.store
+	s.mu.RUnlock()
+	if store == nil {
+		writeError(w, http.StatusServiceUnavailable, "no database open")
+		return
+	}
+
+	ctx := r.Context()
+	runs, err := store.ListActiveProjectionRuns(ctx)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	rebuilt := 0
+	skipped := 0
+	var errs []string
+	for i := range runs {
+		run := &runs[i]
+		// Check if tiles already exist for this run.
+		meta, err := store.QueryTileMeta(ctx, run.ID)
+		if err == nil && meta != nil && meta.TileCount > 0 {
+			skipped++
+			continue
+		}
+		s.logger.Printf("rebuild-tiles: rebuilding run %d (%s lod=%d, %d pts)", run.ID, run.Method, run.LoD, run.NPoints)
+		if err := gbf.RebuildProjectionTiles(ctx, store, run); err != nil {
+			s.logger.Printf("rebuild-tiles: run %d failed: %v", run.ID, err)
+			errs = append(errs, fmt.Sprintf("run %d: %v", run.ID, err))
+		} else {
+			rebuilt++
+		}
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"rebuilt": rebuilt,
+		"skipped": skipped,
+		"errors":  errs,
 	})
 }
 
