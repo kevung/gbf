@@ -1,5 +1,4 @@
 <script>
-  import { onMount } from 'svelte';
   import { fetchRuns, fetchPosition } from '../lib/api.js';
   import TileMap from '../components/TileMap.svelte';
   import PositionDetail from '../components/PositionDetail.svelte';
@@ -7,28 +6,40 @@
   let { refreshTrigger = 0 } = $props();
 
   let runs = $state([]);
+  let runsLoaded = $state(false);
   let error = $state(null);
   let selectedPosition = $state(null);
   let loadingPosition = $state(false);
 
-  // Controls
-  let method = $state('umap_2d');
+  // Controls — driven by the available runs.
+  let selectedRunIdx = $state(0);
   let colorBy = $state('cluster_id');
-  let lod = $state(0);
 
   // Re-fetch runs whenever the parent increments refreshTrigger (tab navigation)
   // or on first mount.
   $effect(() => {
     refreshTrigger; // subscribe
+    runsLoaded = false;
     fetchRuns()
       .then(r => {
         runs = r ?? [];
-        if (runs.length > 0) {
-          method = runs[0].Method || runs[0].method || 'umap_2d';
-        }
+        selectedRunIdx = 0;
+        runsLoaded = true;
       })
-      .catch(e => { error = e.message; });
+      .catch(e => { error = e.message; runsLoaded = true; });
   });
+
+  // Derived: active (method, lod) pair from the selected run.
+  let activeRun = $derived(runs[selectedRunIdx] ?? null);
+  let method = $derived(activeRun ? (activeRun.Method || activeRun.method || 'umap_2d') : 'umap_2d');
+  let lod = $derived(activeRun ? (activeRun.lod ?? 0) : 0);
+
+  function runLabel(r) {
+    const m = (r.Method || r.method || '').toUpperCase();
+    const l = r.lod ?? 0;
+    const n = r.NPoints ?? r.n_points ?? 0;
+    return `${m}  ·  LoD ${l}  ·  ${n.toLocaleString()} pts`;
+  }
 
   async function handlePointClick({ position_id }) {
     if (!position_id) return;
@@ -44,16 +55,18 @@
 
 <div class="controls">
   <label>
-    Method
-    <select bind:value={method}>
-      {#each runs as r}
-        <option value={r.Method || r.method}>{(r.Method || r.method || '').toUpperCase()}</option>
-      {/each}
-      {#if runs.length === 0}
-        <option value="umap_2d">UMAP_2D</option>
-        <option value="pca_2d">PCA_2D</option>
-      {/if}
-    </select>
+    Projection run
+    {#if runs.length > 0}
+      <select bind:value={selectedRunIdx}>
+        {#each runs as r, i}
+          <option value={i}>{runLabel(r)}</option>
+        {/each}
+      </select>
+    {:else if runsLoaded}
+      <span class="no-runs">No projections computed yet — go to Setup</span>
+    {:else}
+      <span class="no-runs">Loading…</span>
+    {/if}
   </label>
 
   <label>
@@ -63,15 +76,6 @@
       <option value="pos_class">Position class</option>
       <option value="away_x">Away X</option>
       <option value="away_o">Away O</option>
-    </select>
-  </label>
-
-  <label>
-    Detail
-    <select bind:value={lod}>
-      <option value={0}>LoD 0 — Overview</option>
-      <option value={1}>LoD 1 — Medium</option>
-      <option value={2}>LoD 2 — Full</option>
     </select>
   </label>
 </div>
@@ -84,7 +88,16 @@
 
 <div class="split-layout">
   <div class="chart-panel">
-    <TileMap {method} {lod} {colorBy} height="100%" onPointClick={handlePointClick} />
+    {#if runsLoaded && activeRun}
+      <TileMap {method} {lod} {colorBy} height="100%" onPointClick={handlePointClick} />
+    {:else if runsLoaded}
+      <div class="no-proj-msg">
+        No projections available.<br>
+        Go to <strong>Setup → Projections</strong> to compute one.
+      </div>
+    {:else}
+      <div class="no-proj-msg">Loading…</div>
+    {/if}
   </div>
 
   <div class="detail-panel">
@@ -115,5 +128,25 @@
     border-radius: var(--radius);
     padding: 10px;
     overflow: hidden;
+  }
+  .no-proj-msg {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 100%;
+    color: var(--text-muted);
+    font-size: 14px;
+    text-align: center;
+    line-height: 1.8;
+  }
+  .no-runs {
+    color: var(--text-muted);
+    font-size: 12px;
+    margin-left: 8px;
+  }
+  .controls label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
   }
 </style>
