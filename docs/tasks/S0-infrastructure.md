@@ -12,14 +12,25 @@ None (independent from GBF track M0-M10). Shares the `xgparser` library.
 
 ## Sub-steps
 
-### S0.1 — Go JSONL Export
+### S0.1 — Go JSONL Export ✅
 
 **Objective**: Add a JSONL export mode to `xgparser` producing 3 file types.
+
+**Implementation**: `cmd/export-jsonl/main.go`
 
 **Input**: .xg files, xgparser source code.
 **Output**: `matches.jsonl`, `games.jsonl`, `positions.jsonl`.
 **Dependencies**: None.
 **Complexity**: Medium.
+
+**Implementation notes (actual)**:
+- `match_id`: SHA256(player1|player2|date|event)[:8] → 16-hex-char deterministic ID
+- Board: two separate 26-int unsigned arrays (`board_p1`, `board_p2`), each
+  from that player's perspective: index 0=bar, 1-24=points, 25=borne-off
+- Cube decisions: `dice` is null, `decision_type`="cube", move fields replaced
+  by `cube_action_played` and `cube_action_optimal`
+- Parallel parsing with N workers (default: NumCPU), single-threaded writer
+- Append mode: safe to resume; each run appends to existing files
 
 **Schema `matches.jsonl`** (one JSON object per line):
 ```json
