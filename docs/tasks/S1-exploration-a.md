@@ -53,29 +53,50 @@ python scripts/descriptive_stats.py \
 
 ---
 
-### S1.2 — Feature-Error Correlation Analysis
+### S1.2 — Feature-Error Correlation Analysis ✅
 
 **Objective**: Identify which position and context features are most
 correlated with error magnitude.
 
-**Input**: `positions_enriched` table.
-**Output**: Correlation matrix, feature importance ranking, visualizations.
+**Implementation**: `scripts/correlation_analysis.py`
+
+**Input**: `positions_enriched` table (S0.4).
+**Output**: Ranked feature lists + 8 CSV files in `--output` dir.
 **Dependencies**: S0.4.
 **Complexity**: Medium.
 
-**Method**:
-1. Spearman correlation (non-linear) between each feature and `move_played_error`
-2. Mutual information between categorical features and error
-3. Separate analysis: checker errors vs cube errors (very different mechanisms)
-4. Watch for confounders: pip count correlates with game phase, which
-   correlates with error → multivariate analysis needed
-5. Random Forest feature importance as complement (lightweight model,
-   goal = interpretability)
+**Methods implemented**:
+1. Spearman rank correlation (`scipy.stats.spearmanr`) between each feature
+   and `move_played_error` — sorted by `abs_rho` descending
+2. Mutual information (`sklearn.feature_selection.mutual_info_regression`)
+   with discrete-feature detection (integer columns flagged automatically)
+3. Random Forest feature importance (`RandomForestRegressor`, n=50, depth=5,
+   n_jobs=-1) — lightweight model trained on `--sample` rows (default 500K)
+4. Checker vs cube split: checker target = `move_played_error`;
+   cube target = `abs(eval_equity)` (proxy for cube decision magnitude)
+5. Error stratification by game phase, away score bracket, cube owner
 
-**Visualizations**:
-- Correlation heatmap between all features
-- Scatter plots of top 5 features vs error
-- Box plots of error by category (game phase, away score bracket, cube owner)
+**Features analyzed (29 checker, 15 cube)**:
+- Board structure: pip counts, blots, points made, home board, primes,
+  back anchor, builders, outfield blots, checkers on bar/borne off
+- Match context: match_phase, gammon_threat/risk/net, cube_leverage
+- Score: score_away_p1/p2, score_differential
+- Eval: eval_win, eval_equity (confounder analysis)
+
+**Away score brackets**: 1-away / 2-away / 3-4-away / 5-7-away / 8+-away / money
+
+**CSV outputs** (8 files):
+`spearman_checker.csv`, `spearman_cube.csv`, `mutual_info_checker.csv`,
+`rf_importance_checker.csv`, `rf_importance_cube.csv`,
+`error_by_phase.csv`, `error_by_score_bracket.csv`, `error_by_cube_owner.csv`
+
+**Usage**:
+```bash
+python scripts/correlation_analysis.py \
+  --enriched data/parquet/positions_enriched \
+  --parquet-dir data/parquet \
+  [--output data/stats] [--sample 500000]
+```
 
 ---
 
