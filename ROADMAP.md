@@ -304,3 +304,23 @@ All → M10.7
 ```
 
 **Task sheet**: [docs/tasks/M10-perf-lod.md](docs/tasks/M10-perf-lod.md)
+
+---
+
+## Study Track — Backgammon Data Mining (S0-S4)
+
+A parallel research track that mines 24 GB of XG data (166K matches,
+~160M positions) using a Python/Polars/DuckDB pipeline independent from
+the GBF binary format. Results feed back into future GBF schema revisions.
+
+| Phase | Fiches | Focus |
+|-------|--------|-------|
+| S0 Infrastructure  | S0.1-S0.7 | JSONL export, Parquet, DuckDB, features, hashing, graph |
+| S1 Exploration     | S1.1-S1.8 | Stats, correlation, clustering, anomalies, topology |
+| S2 Player Profiling| S2.1-S2.4 | Metrics, archetypes, ranking, strengths/weaknesses |
+| S3 Practical Rules | S3.1-S3.6 | Cube heatmaps, MET, thresholds, heuristics, gammon |
+| S4 Web Dashboard   | S4.1-S4.7 | Views, API, board component, frontend, trajectory map |
+
+**Detailed roadmap**: [ROADMAP-STUDY.md](ROADMAP-STUDY.md)
+**Pipeline architecture**: [docs/architecture-study.md](docs/architecture-study.md)
+**Original plan (French)**: [plan_backgammon_mining.md](plan_backgammon_mining.md)

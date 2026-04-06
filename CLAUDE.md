@@ -9,14 +9,16 @@ large-scale backgammon position storage, querying, and visualization.
 gbf/
   SPEC.md              # Binary format specification (v1.0-draft)
   ARCHITECTURE.md      # System architecture (5 layers)
-  ROADMAP.md           # Implementation plan (M0-M9)
+  ROADMAP.md           # Implementation plan (M0-M10)
+  ROADMAP-STUDY.md     # Mining study roadmap (S0-S4, 32 fiches)
   README.md            # Project overview
   legacy/              # v0.3 reference implementation (DO NOT MODIFY)
     gbf.go, record.go, zobrist.go, hash.go, parse.go
     convert_xg.go, convert_gnubg.go, convert_bgf.go
     gbf_test.go, SPEC.md
   data/                # Test files and BMAB dataset (git-ignored for bmab)
-  docs/tasks/          # Detailed task sheets (M0-M9)
+  docs/tasks/          # Detailed task sheets (M0-M10, S0-S4)
+  docs/architecture-study.md  # Mining pipeline architecture
 ```
 
 ## Conventions
@@ -30,7 +32,10 @@ gbf/
 
 - Format spec: SPEC.md (base record layout, analysis blocks, Zobrist)
 - Architecture: ARCHITECTURE.md (Store interface, SQL schema, 5 layers)
-- Roadmap: ROADMAP.md (milestones M0-M9, dependency graph)
+- Roadmap: ROADMAP.md (milestones M0-M10, dependency graph)
+- Mining study: ROADMAP-STUDY.md (phases S0-S4, 32 fiches)
+- Mining architecture: docs/architecture-study.md (JSONL/Parquet/DuckDB pipeline)
+- Original study plan (French): plan_backgammon_mining.md
 - Legacy code: legacy/ (v0.3, read-only reference for porting)
 
 ## Important Rules

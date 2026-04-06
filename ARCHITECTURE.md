@@ -436,6 +436,31 @@ files channel → [N parser goroutines] → results channel → [1 DB writer]
 
 In PostgreSQL: parallel imports further enabled by MVCC (no single-writer constraint).
 
+## Parallel Track: Mining Study Pipeline
+
+The mining study ([ROADMAP-STUDY.md](ROADMAP-STUDY.md)) uses an independent
+data pipeline optimized for analytical queries on 160M XG positions:
+
+```
+.xg files → xgparser (Go, JSONL export) → Parquet (Polars) → DuckDB/Polars
+```
+
+| Aspect | GBF Pipeline | Mining Pipeline |
+|--------|-------------|-----------------|
+| Language | Go | Python (Polars, DuckDB) |
+| Storage | SQLite / PostgreSQL | Parquet files |
+| Query | Go Store API + SQL | DuckDB SQL + Polars |
+| Format | GBF binary (80B records) | JSONL → Parquet |
+| Purpose | Normalized storage + API | Analytical exploration |
+
+The two pipelines share `xgparser` but are otherwise independent. Mining
+study findings will inform future GBF schema changes (new derived columns,
+clustering labels, etc.).
+
+**Detailed architecture**: [docs/architecture-study.md](docs/architecture-study.md)
+
+---
+
 ## Resolved Questions (from Phase 1)
 
 All open questions resolved by M5 exploration and M9 refinement:
