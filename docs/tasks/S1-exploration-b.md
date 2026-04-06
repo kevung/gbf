@@ -99,25 +99,51 @@ python scripts/analyze_dice.py \
 
 ---
 
-### S1.7 — Temporal & Sequential Analysis
+### S1.7 — Temporal & Sequential Analysis ✅
 
 **Objective**: Study how play quality evolves within matches and games.
 
-**Input**: Positions, games, matches tables.
-**Output**: Evolution curves, fatigue/tilt tests.
-**Dependencies**: S0.3.
+**Implementation**: `scripts/analyze_temporal.py`
+
+**Input**: `positions_enriched` directory (S0.4) + `games.parquet` (S0.2).
+**Output**: 6 CSV files + autocorrelation summary in `--output` directory.
+**Dependencies**: S0.3, S0.4.
 **Complexity**: Medium.
 
-**Analyses**:
-- Average error by game number within match: is there degradation (fatigue)
-  or improvement (warm-up)?
-- Average error by move number within game: early vs late game
-- Post-blunder effect: does a player who makes a blunder play worse on the
-  next move? (tilt)
-- Post-loss effect: does play quality drop after losing a game?
-- Score deficit effect: when trailing significantly, do players play better
-  or worse?
-- Error autocorrelation: do errors come in series?
+**Analyses implemented**:
+1. Error by game number within match: fatigue (degradation over games)
+   vs warm-up (improvement). Grouped by game_number, showing mean/median
+   error, nontrivial rate, and blunder rate.
+2. Error by move number within game: binned in 5-move intervals.
+   Early vs late game error patterns.
+3. Post-blunder tilt: for each position, look up the same player's
+   previous move (move_number - 2, since players alternate). Compare
+   error after a blunder (≥ 0.100) vs after a normal move. Includes
+   severity breakdown of the triggering blunder.
+4. Post-loss effect: join positions with games table to determine if
+   the on-roll player lost the previous game. Compare error for
+   "lost_prev" / "won_prev" / "first_game". Includes breakdown by
+   game number (does post-loss effect worsen in late games?).
+5. Score deficit effect: using score_differential (or computed from
+   score_away fields), bucket positions by deficit level from
+   "big deficit (≤-4)" to "big lead (≥+4)". Error comparison
+   across brackets.
+6. Error autocorrelation: lag-1 Pearson correlation of consecutive
+   errors by the same player in the same game. Plus bucketed analysis:
+   mean next error given previous error level.
+
+**CSV outputs** (6 files):
+`error_by_game_number.csv`, `error_by_move_number.csv`,
+`post_blunder_tilt.csv`, `post_loss_effect.csv`,
+`score_deficit_effect.csv`, `error_autocorrelation.csv`
+
+**Usage**:
+```bash
+python scripts/analyze_temporal.py \
+  --enriched data/parquet/positions_enriched \
+  --parquet data/parquet \
+  [--output data/temporal] [--sample 500000]
+```
 
 ---
 
