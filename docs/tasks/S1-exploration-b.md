@@ -11,25 +11,52 @@ S0.4 (feature engineering), S0.7 (trajectory graph for S1.8).
 
 ## Sub-steps
 
-### S1.5 — Position Volatility Analysis
+### S1.5 — Position Volatility & Complexity Analysis ✅
 
-**Objective**: Study volatility (spread between candidate moves) as a
-measure of complexity and risk.
+**Objective**: Study position complexity and its relationship to error
+magnitude across game phase, score context, and structural features.
 
-**Input**: Positions table with candidate moves.
-**Output**: Volatility analysis by game phase, score, structure.
+**Implementation**: `scripts/analyze_volatility.py`
+
+**Input**: `positions_enriched` directory (S0.4, checker decisions only).
+**Output**: Complexity breakdown CSVs by phase, pip, gammon, leverage.
 **Dependencies**: S0.4.
 **Complexity**: Medium.
 
-**Method**:
-1. Volatility = standard deviation of the N candidate move equities
-2. Also: gap between best and second-best move (error margin)
-3. Correlate volatility with: game phase, pip count, blot count, away score
-4. Test hypothesis: do high-volatility positions produce more errors?
-5. Identify position configurations that systematically generate high volatility
+**Note on design**: the `candidates` column was dropped in S0.2 to avoid
+nested-struct complexity. True volatility (std dev of candidate equities)
+is therefore unavailable. `move_played_error` is used as a proxy for
+decision difficulty.
 
-**Practical value**: high-volatility positions are those requiring the most
-thought — a warning signal for players.
+**Complexity classes** (based on `move_played_error`):
+- `trivial` (< 0.010): essentially perfect play
+- `easy` (0.010–0.025): slight inaccuracy
+- `moderate` (0.025–0.050): non-trivial decision
+- `difficult` (0.050–0.100): hard position
+- `very-difficult` (≥ 0.100): blunder-level complexity
+
+**Analyses implemented**:
+1. Overall complexity class distribution (count + mean error)
+2. Complexity by game phase (contact / race / bearoff)
+3. Complexity by pip count bins (game stage proxy)
+4. Complexity by gammon threat level (<10% / 10-25% / 25-40% / ≥40%)
+5. Complexity by cube leverage (<0.25 / 0.25-0.50 / 0.50-1.00 / ≥1.00)
+6. High-complexity position profile: feature means for error ≥ 0.050
+   vs trivial positions — ratios reveal which structures are hardest
+7. Complexity by move number within game (early vs late game patterns)
+
+**CSV outputs** (7 files):
+`complexity_distribution.csv`, `complexity_by_phase.csv`,
+`complexity_by_pip.csv`, `complexity_by_gammon.csv`,
+`complexity_by_leverage.csv`, `high_complexity_profile.csv`,
+`complexity_by_move_number.csv`
+
+**Usage**:
+```bash
+python scripts/analyze_volatility.py \
+  --enriched data/parquet/positions_enriched \
+  [--output data/volatility] [--sample 500000]
+```
 
 ---
 
