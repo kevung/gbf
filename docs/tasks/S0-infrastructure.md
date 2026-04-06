@@ -308,39 +308,45 @@ python scripts/compute_position_hashes.py \
 
 ---
 
-### S0.7 — Trajectory Graph Construction
+### S0.7 — Trajectory Graph Construction ✅
 
 **Objective**: Model games as trajectories in position space with hashed
 positions as nodes and moves as edges.
 
-**Input**: `position_hashes` (S0.6) + positions + games.
-**Output**: Transition graph between hashed positions + edge metadata.
+**Implementation**: `scripts/build_trajectory_graph.py`
+
+**Input**: `position_hashes.parquet` + `convergence_index.parquet` (S0.6) + positions.
+**Output**: 4 Parquet files (raw edges, aggregated edges, nodes, trajectories).
 **Dependencies**: S0.6.
 **Complexity**: High.
 
-**Graph structure**:
-- Nodes = position_hash (unique canonical positions)
-- Edges = observed transitions between consecutive positions in a game
+**Outputs**:
 
-**Schema `edges.parquet`**:
-- from_hash (uint64), to_hash (uint64), game_id, match_id, move_number,
-  dice (array), move_played (string), error (float), player (string)
+`graph_edges.parquet` — raw transitions (one row per consecutive game pair):
+- from_hash, to_hash, game_id, match_id, move_number, move_played, error, decision_type
 
-**Pre-computed node metrics**:
-- In/out degree (how many transitions arrive/depart)
-- Distinct match count through this node
-- Average decision error at this node
-- Average equity at this node
-- Move diversity (entropy of outgoing transitions)
+`graph_edges_agg.parquet` — aggregated unique transitions:
+- from_hash, to_hash, frequency, proportion, avg_error, top_move
 
-**Pre-computed edge metrics**:
-- Frequency: how many times this exact transition was observed
-- Proportion: share of all outgoing transitions from from_hash
+`graph_nodes.parquet` — nodes with distinct_matches ≥ threshold:
+- position_hash, occurrence_count, distinct_games, distinct_matches,
+  in_degree, out_degree, avg_error, avg_equity, move_entropy (Shannon bits)
 
-**Game trajectory**: ordered hash sequence [h0, h1, h2, ..., hn].
-A match = set of trajectories.
+`graph_trajectories.parquet` — full hash sequence per game:
+- game_id, match_id, trajectory (List[Int64])
 
-**Size management**:
-- Materialize only nodes with occurrence >= threshold (e.g., >= 3 distinct matches)
-- Rare edges (seen once) can be filtered for visualization but kept for queries
-- Store as Parquet; use DuckDB for trajectory queries
+**Node metrics computed**:
+- in/out degree from aggregated edges
+- avg_error, avg_equity from positions join
+- move_entropy: Shannon entropy of outgoing move distribution
+
+**Size management**: `--node-threshold N` (default 3) materializes only
+nodes seen in ≥ N distinct matches. Rare edges kept in raw file, filterable.
+
+**Usage**:
+```bash
+python scripts/build_trajectory_graph.py \
+  --parquet-dir data/parquet \
+  --output data/parquet \
+  [--node-threshold 3] [--chunk-rows 200000]
+```
