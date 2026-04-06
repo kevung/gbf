@@ -147,47 +147,59 @@ python scripts/analyze_temporal.py \
 
 ---
 
-### S1.8 — Convergence & Graph Topology
+### S1.8 — Convergence & Graph Topology ✅
 
 **Objective**: Explore the trajectory graph structure — crossroads,
 convergence, divergence, and topological metrics.
 
-**Input**: Trajectory graph (S0.7), position clusters (S1.3).
-**Output**: Crossroad map, convergence analysis, topological metrics report.
+**Implementation**: `scripts/analyze_graph_topology.py`
+
+**Input**: Trajectory graph (S0.7), position clusters (S1.3, optional).
+**Output**: 9 CSV files in `--output` directory.
 **Dependencies**: S0.7, S1.3.
 **Complexity**: High.
 
 **Game crossroads**:
 - Identify positions traversed by the most distinct matches
 - Characterize crossroads: concentrated in openings? Do some exist in
-  mid-game?
-- For each crossroad: what is the continuation range? Is there a dominant
-  move or genuine diversity?
+  mid-game? (avg_move_number per hash)
+- For each crossroad: what is the continuation range? (move_entropy)
 - Correlation between crossroad frequency and average error: are familiar
-  positions played better?
+  positions played better? (Spearman ρ + binned table)
 
 **Divergence analysis**:
-- From a given crossroad, follow diverging trajectories: at what horizon
-  (number of moves) do two games that were at the same point become
-  "structurally different" (cluster change)?
-- Measure "divergence rate": are some positions bifurcation points (one
-  move changes everything) vs stable positions (trajectories stay similar)?
+- From top 20 crossroads, track successor hashes at horizons H=3, 5, 10
+- divergence_rate = distinct successors / total games at each horizon
+- cluster_retention = fraction of trajectories still in the same S1.3 cluster
 
 **Convergence analysis**:
-- The inverse: do games from very different positions converge to the same
-  positions? (e.g., different openings leading to the same mid-game structures)
-- Identify "attractors": positions the game naturally tends toward
+- Convergence attractors: nodes with high in_degree / out_degree ratio
+- Enriched with dominant S1.3 cluster label
 
 **Graph topological metrics**:
-- Degree distribution (power law? scale-free?)
-- Connected components: is the graph connected or fragmented?
-- Betweenness centrality: which positions are mandatory passages?
-- Louvain communities: do they correspond to feature clusters (S1.3)?
+- Degree distribution (in/out), power-law indicators → `degree_distribution.csv`
+- Weakly/strongly connected components
+- Approximate betweenness centrality on k-core subgraph (k=200 samples)
+  → `betweenness_centrality.csv`
+- Louvain communities + cross-table vs S1.3 clusters
+  → `louvain_communities.csv`, `community_vs_cluster.csv`
 
-**Paths and distance**:
-- Average distance between two positions (in moves) in the graph
-- Most frequent paths (3-5 move sequences most observed)
-- Are there "highways" (high-frequency paths) vs "trails" (rare transitions)?
+**Paths**:
+- Most frequent 3-5 move n-grams from game trajectories → `frequent_paths.csv`
+- Edge frequency bins: highway (≥10 traversals) vs trail → `path_categories.csv`
 
-**Deliverable**: topological report + catalogue of top 100 crossroads with
-their profile.
+**CSV outputs** (9 files):
+`top_crossroads.csv`, `crossroads_error_correlation.csv`,
+`degree_distribution.csv`, `betweenness_centrality.csv`,
+`louvain_communities.csv`, `community_vs_cluster.csv`,
+`frequent_paths.csv`, `path_categories.csv`,
+`divergence_analysis.csv`, `convergence_attractors.csv`
+
+**Usage**:
+```bash
+python scripts/analyze_graph_topology.py \
+  --graph-dir data/parquet \
+  --parquet-dir data/parquet \
+  --clusters-dir data/clusters \
+  [--output data/graph_topology] [--max-traj 50000]
+```

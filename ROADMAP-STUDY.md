@@ -5,7 +5,7 @@
 | Phase | Status | Fiches | Notes |
 |-------|--------|--------|-------|
 | S0 Data Infrastructure  | ✅ Complete | S0.1-S0.7 | All 7 fiches done — JSONL→Parquet→DuckDB→Features→Validation→Hashing→Graph |
-| S1 Exploration           | 🔄 In Progress | S1.1-S1.8 | S1.1-S1.7 ✅; S1.8 planned |
+| S1 Exploration           | ✅ Complete | S1.1-S1.8 | All 8 fiches done — Stats→Correlation→Clustering→Anomaly→Volatility→Dice→Temporal→GraphTopology |
 | S2 Player Profiling      | ⬜ Planned | S2.1-S2.4 | Metrics, clustering, ranking, strengths/weaknesses |
 | S3 Practical Rules       | ⬜ Planned | S3.1-S3.6 | Cube heatmaps, MET, thresholds, heuristics, gammon, model |
 | S4 Web Dashboard         | ⬜ Planned | S4.1-S4.7 | Views, architecture, board component, API, frontend, trajectories |
@@ -148,7 +148,7 @@ matches), Parquet + DuckDB queries.
 | S1.5 ✅ | Position volatility analysis | S0.4 | Medium |
 | S1.6 ✅ | Dice structure analysis | S0.4 | Low-Med |
 | S1.7 ✅ | Temporal & sequential analysis (fatigue, tilt) | S0.3 | Medium |
-| S1.8 | Convergence & graph topology | S0.7, S1.3 | High |
+| S1.8 ✅ | Convergence & graph topology | S0.7, S1.3 | High |
 
 **S1.1** — Error/equity/phase distributions, away score frequency, match/game
 lengths, top tournaments/players, temporal trends, cube value distribution.
@@ -172,9 +172,10 @@ and dice×gammon-threat interactions. Error by total pips moved.
 post-loss effect, score deficit effect, error autocorrelation.
 Implementation: `scripts/analyze_temporal.py`.
 
-**S1.8** — Crossroads (most-traversed, continuation diversity, familiarity vs
+**S1.8** ✅ — Crossroads (most-traversed, continuation diversity, familiarity vs
 error), divergence/convergence, degree distribution, betweenness centrality,
 Louvain communities, frequent 3-5 move paths, highways vs trails.
+Implementation: `scripts/analyze_graph_topology.py`.
 
 ---
 
