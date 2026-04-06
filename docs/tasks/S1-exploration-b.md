@@ -60,24 +60,42 @@ python scripts/analyze_volatility.py \
 
 ---
 
-### S1.6 — Dice Structure Analysis
+### S1.6 — Dice Structure Analysis ✅
 
 **Objective**: Explore the relationship between dice rolled, position
 structure, and decision quality.
 
-**Input**: `positions_enriched` (checker decisions only).
-**Output**: Analysis by dice combination.
+**Implementation**: `scripts/analyze_dice.py`
+
+**Input**: `positions_enriched` directory (S0.4, checker decisions with dice).
+**Output**: Error/nontrivial-rate breakdown by dice combination and context.
 **Dependencies**: S0.4.
 **Complexity**: Low-Medium.
 
-**Analyses**:
-- Average error per dice combination (21 unordered combinations): are some
-  rolls systematically played worse?
-- Dice x game phase interaction: are doubles played worse in bearing off?
-- Dice x structure interaction: do certain combinations on certain prime or
-  blot patterns induce more errors?
-- Average number of reasonable candidate moves per dice combination
-  (decision complexity)
+**Dice features derived**:
+- `combo`: canonical unordered pair label (`[6,1]` → `"61"`, `[1,6]` → `"61"`)
+- `is_double`: boolean
+- `total_pips`: 2×(a+b) for non-doubles, 4×a for doubles
+
+**Analyses implemented**:
+1. Mean error per dice combination (all 21 unordered pairs), sorted by
+   mean error — identifies which rolls are systematically harder to play
+2. Doubles vs non-doubles: error + nontrivial rate comparison
+3. Dice × game phase: doubles/non-doubles error split per phase
+   (contact / race / bearoff)
+4. Error by total pips moved (movement potential effect)
+5. Doubles × gammon threat: does high gammon threat amplify doubles errors?
+
+**CSV outputs** (5 files):
+`error_by_dice_combo.csv`, `doubles_vs_nondoubles.csv`,
+`dice_by_phase.csv`, `error_by_dice_pips.csv`, `dice_by_gammon.csv`
+
+**Usage**:
+```bash
+python scripts/analyze_dice.py \
+  --enriched data/parquet/positions_enriched \
+  [--output data/dice] [--sample 500000]
+```
 
 ---
 
