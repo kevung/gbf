@@ -173,57 +173,54 @@ class BGDatabase:
 
 ---
 
-### S0.4 — Feature Engineering
+### S0.4 — Feature Engineering ✅
 
 **Objective**: Compute ~30 interpretable features from raw board state.
 
-**Input**: Positions table in Parquet.
-**Output**: `positions_enriched.parquet` with ~30 additional columns.
+**Implementation**: `scripts/compute_features.py`
+
+**Input**: Positions table in Parquet + games join (for score columns).
+**Output**: `positions_enriched/*.parquet` — 33 new columns added.
 **Dependencies**: S0.2.
 **Complexity**: Medium-High.
 
-**Position structure features (per player)**:
-- `pip_count`: weighted sum of checkers x distance to off
-- `pip_count_diff`: difference between players
-- `num_blots`: isolated checkers (vulnerable)
-- `num_points_made`: held points (>= 2 checkers)
-- `home_board_points`: held points in home board (1-6)
-- `home_board_strength`: weighted home board score (high points worth more)
-- `longest_prime`: longest sequence of consecutive held points
-- `prime_location`: starting point of longest prime
-- `back_anchor`: most advanced held point in opponent's board (0 if none)
-- `num_checkers_back`: checkers in opponent's board
-- `num_on_bar`: checkers on the bar
-- `num_borne_off`: checkers borne off
-- `num_builders`: lone checkers adjacent to points to build
-- `connectivity`: proximity measure between checkers
-- `outfield_blots`: blots between points 7 and 18
-- `timing`: ability to maintain a position indicator
+**Features implemented (33 columns)**:
 
-**Match context features**:
-- `match_phase`: "contact", "race", "bearoff"
-- `cube_leverage`: cube_value / remaining points ratio
-- `gammon_threat`: combined gammon probability (win_g + win_bg)
-- `gammon_risk`: probability of losing gammon (lose_g + lose_bg)
-- `net_gammon`: gammon_threat - gammon_risk
-- `take_point_money`: 0.25 (constant, for comparison)
-- `take_point_match`: calculated from MET and away score
-- `cube_efficiency`: equity ratio with/without cube
-- `volatility`: std dev of candidate move equities
+Board structure (vectorized Polars expressions):
+- `pip_count_p1/p2`, `pip_count_diff`
+- `num_blots_p1/p2`, `num_points_made_p1/p2`
+- `home_board_points_p1/p2`, `home_board_strength_p1`
+- `num_on_bar_p1/p2`, `num_borne_off_p1/p2`
+- `num_checkers_back_p1`, `outfield_blots_p1`
 
-**Away score features**:
-- `leader`: leading player (1, 2, or 0 if tied)
-- `score_differential`: away score difference
-- `crawford_proximity`: min(away_p1, away_p2) - 1
-- `is_2away_2away`, `is_2away_4away`, etc.: classic score flags
-- `pre_crawford`, `crawford`, `post_crawford`: match phase
-- `dgr` (dead gammon risk): gammon worthless for leader at certain scores
+Complex board features (map_elements for sequential logic):
+- `longest_prime_p1/p2`, `prime_location_p1`
+- `back_anchor_p1` (highest made point in opp home board, 19-24)
+- `num_builders_p1`
+
+Match context:
+- `match_phase` (0=contact, 1=race, 2=bearoff) — contact test: back1+back2>24
+- `gammon_threat`, `gammon_risk`, `net_gammon`
+- `cube_leverage` (cube_value / max(away))
+
+Score features (joined from games table):
+- `leader`, `score_differential`, `is_dmp`, `dgr`
+- `is_pre_crawford`, `is_post_crawford`
+- `take_point_match` (Janowski approximation — full Kazaross MET deferred)
 
 **Implementation notes**:
-- Batch compute with Polars (vectorized expressions, no Python loops)
-- Prime/contact detection: Python utility functions, then vectorize
-- MET: integrate Kazaross-XG2 Match Equity Table as reference
-- Output: `positions_enriched.parquet`
+- Polars vectorized expressions for all simple features (no Python loops)
+- `map_elements` only for sequential logic (prime, anchor, builders)
+- DuckDB JOIN positions + games per chunk; streamed chunk-by-chunk
+- Output partitioned by hash(game_id[:16]) % N, snappy compression
+
+**Usage**:
+```bash
+python scripts/compute_features.py \
+  --parquet-dir data/parquet \
+  --output data/parquet/positions_enriched \
+  [--chunk-rows 100000] [--parts 16]
+```
 
 ---
 
