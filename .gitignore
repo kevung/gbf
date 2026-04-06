@@ -10,3 +10,4 @@ data/*.db-wal
 explorer/node_modules/
 explorer/dist/
 *.import.journal
+export-jsonl
