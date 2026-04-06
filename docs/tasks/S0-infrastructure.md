@@ -261,40 +261,50 @@ python scripts/validate_data.py \
 
 ---
 
-### S0.6 — Position Hashing + Convergence Index
+### S0.6 — Position Hashing + Convergence Index ✅
 
 **Objective**: Create a canonical hash per position to detect when different
 games traverse the same exact position.
 
-**Input**: Positions table in Parquet.
+**Implementation**: `scripts/compute_position_hashes.py`
+
+**Input**: Positions table in Parquet (joined with games for score columns).
 **Output**: `position_hashes.parquet` + `convergence_index.parquet`.
 **Dependencies**: S0.2.
 **Complexity**: Medium-High.
 
-**Canonicalization**:
-1. Normalize: always encode from on-roll player's perspective
-2. Hash = `hash(board_canonical, cube_value, cube_owner_relative,
-   score_away_on_roll, score_away_opponent)`
-3. Use xxhash64 or cityhash for performance on 160M positions
+**Canonical key (32 bytes, xxhash64)**:
+```
+[0:26]  board_p1 as int8   (on-roll player's perspective — already canonical)
+[26]    cube_value_log2     (0-6, uint8)
+[27]    cube_owner          (0=center, 1=on-roll, 2=opponent, uint8)
+[28:30] score_away_on_roll  (uint16 LE)
+[30:32] score_away_opponent (uint16 LE)
+```
+Hash stored as int64 (signed reinterpretation of uint64, same as GBF Zobrist).
 
 **Output schemas**:
 
 `position_hashes.parquet`:
-- position_id (string), position_hash (uint64), game_id, match_id, move_number
+- position_id, position_hash (int64), game_id, match_id, move_number, decision_type
 
 `convergence_index.parquet`:
-- position_hash (uint64), occurrence_count (int), distinct_matches (int),
-  distinct_games (int)
+- position_hash (int64), occurrence_count, distinct_games, distinct_matches
+  (ordered by occurrence_count DESC)
 
-**Preliminary analyses**:
-- Hash occurrence distribution: how many positions are unique vs shared?
-- Top 1000 most frequent positions (the "crossroads" of the game)
-- Convergence rate by game phase: do openings converge more than mid-game?
+**Preliminary report** (printed to stdout):
+- Total / unique / shared positions + singleton rate
+- Occurrence frequency distribution (1×, 2×, 3–5×, …, ≥1001×)
+- Top 20 most frequent hashes (crossroads)
+- Count of positions in ≥3 distinct matches (trajectory node threshold)
 
-**Implementation notes**:
-- Batch compute with Polars + hashing UDF
-- Store hash → position_ids as Parquet with group-by (not in memory)
-- Minimum occurrence threshold for trajectory analysis (e.g., ≥ 5 distinct matches)
+**Usage**:
+```bash
+python scripts/compute_position_hashes.py \
+  --parquet-dir data/parquet \
+  --output data/parquet \
+  [--chunk-rows 200000]
+```
 
 ---
 
