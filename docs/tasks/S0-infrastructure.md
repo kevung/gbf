@@ -105,10 +105,12 @@ None (independent from GBF track M0-M10). Shares the `xgparser` library.
 
 ---
 
-### S0.2 — JSONL to Parquet Conversion
+### S0.2 — JSONL to Parquet Conversion ✅
 
 **Objective**: Convert JSONL to partitioned Parquet files optimized for
 analytical queries.
+
+**Implementation**: `scripts/convert_jsonl_to_parquet.py`
 
 **Input**: JSONL files from S0.1.
 **Output**: `data/matches.parquet`, `data/games.parquet`,
@@ -116,16 +118,22 @@ analytical queries.
 **Dependencies**: S0.1.
 **Complexity**: Low.
 
-**Details**:
-- Language: Python with `pyarrow` or `polars`
-- Partitioning: positions by match_id batch (or tournament), target
-  ~100-500 MB per file
-- Strict typing: int8 for board, float32 for probabilities, categorical
-  string for player/tournament names
-- Compression: snappy (default, good speed/size tradeoff)
-- Verification: total count of positions, matches, games after conversion
+**Implementation notes (actual)**:
+- Polars for JSONL reading and type casting; PyArrow for partitioned writes
+- Positions partitioned by `hash(match_id) % N` (default N=16)
+- Strict typing: `board_p1`/`board_p2` as `List[Int8]`, probabilities as
+  `Float32`, equity as `Float64`, player/tournament as `Categorical`
+- Streaming chunk-by-chunk (default 500K rows) — safe for 24 GB datasets
+- Compression: snappy; verification step re-reads and asserts counts
+- `candidates` column dropped (nested struct — store separately if needed)
 
-**Script**: `scripts/convert_jsonl_to_parquet.py`
+**Usage**:
+```bash
+python scripts/convert_jsonl_to_parquet.py \
+  --jsonl-dir data/jsonl \
+  --parquet-dir data/parquet \
+  [--positions-parts 16] [--chunk-rows 500000]
+```
 
 ---
 

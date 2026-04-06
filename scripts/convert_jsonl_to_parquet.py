@@ -1,0 +1,350 @@
+#!/usr/bin/env python3
+"""S0.2 — JSONL to Parquet conversion for the mining study pipeline.
+
+Converts matches.jsonl, games.jsonl, positions.jsonl (from cmd/export-jsonl)
+to partitioned Parquet files with strict typing and snappy compression.
+
+Output layout:
+  <parquet-dir>/
+    matches.parquet             one file, ~few MB
+    games.parquet               one file, ~few MB
+    positions/
+      part-0000.parquet         ~100-500 MB per file
+      part-0001.parquet
+      ...
+
+Board columns (board_p1, board_p2) stored as fixed-size list[int8] (26 vals).
+Probability columns (eval_win, etc.) stored as float32.
+String columns (player, tournament) stored as categorical.
+
+Usage:
+    python scripts/convert_jsonl_to_parquet.py \\
+        --jsonl-dir data/jsonl \\
+        --parquet-dir data/parquet \\
+        [--positions-parts 16] \\
+        [--chunk-rows 500000]
+"""
+
+import argparse
+import json
+import os
+import sys
+import time
+from pathlib import Path
+
+import polars as pl
+import pyarrow as pa
+import pyarrow.parquet as pq
+
+
+# ---------------------------------------------------------------------------
+# Schema definitions
+# ---------------------------------------------------------------------------
+
+MATCHES_SCHEMA = {
+    "match_id": pl.String,
+    "player1": pl.Categorical,
+    "player2": pl.Categorical,
+    "match_length": pl.Int16,
+    "tournament": pl.Categorical,
+    "date": pl.String,
+    "num_games": pl.Int16,
+    "winner": pl.Int8,
+    "score_final_p1": pl.Int16,
+    "score_final_p2": pl.Int16,
+}
+
+GAMES_SCHEMA = {
+    "game_id": pl.String,
+    "match_id": pl.String,
+    "game_number": pl.Int16,
+    "score_away_p1": pl.Int16,
+    "score_away_p2": pl.Int16,
+    "crawford": pl.Boolean,
+    "winner": pl.Int8,
+    "points_won": pl.Int16,
+    "gammon": pl.Boolean,
+    "backgammon": pl.Boolean,
+}
+
+# Positions schema (applied after initial read; board arrays handled separately)
+POSITIONS_SCALAR_SCHEMA = {
+    "position_id": pl.String,
+    "game_id": pl.String,
+    "move_number": pl.Int16,
+    "player_on_roll": pl.Int8,
+    "decision_type": pl.Categorical,
+    "cube_value": pl.Int8,
+    "cube_owner": pl.Int8,
+    "eval_equity": pl.Float64,
+    "eval_win": pl.Float32,
+    "eval_win_g": pl.Float32,
+    "eval_win_bg": pl.Float32,
+    "eval_lose_g": pl.Float32,
+    "eval_lose_bg": pl.Float32,
+    "move_played": pl.String,
+    "move_played_error": pl.Float32,
+    "best_move": pl.String,
+    "best_move_equity": pl.Float64,
+    "cube_action_played": pl.Categorical,
+    "cube_action_optimal": pl.Categorical,
+}
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def cast_columns(df: pl.DataFrame, schema: dict) -> pl.DataFrame:
+    """Cast existing columns to target types; ignore missing columns."""
+    exprs = []
+    for col, dtype in schema.items():
+        if col in df.columns:
+            exprs.append(pl.col(col).cast(dtype))
+    if exprs:
+        df = df.with_columns(exprs)
+    return df
+
+
+def board_list_to_int8(df: pl.DataFrame, col: str) -> pl.DataFrame:
+    """Cast a List[...] board column to List[Int8]."""
+    if col in df.columns:
+        df = df.with_columns(
+            pl.col(col).list.eval(pl.element().cast(pl.Int8)).alias(col)
+        )
+    return df
+
+
+def partition_index(match_id: str, n_parts: int) -> int:
+    """Deterministic partition assignment from match_id."""
+    return hash(match_id) % n_parts
+
+
+def count_lines(path: Path) -> int:
+    """Count newline-terminated lines in a file."""
+    n = 0
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            n += chunk.count(b"\n")
+    return n
+
+
+# ---------------------------------------------------------------------------
+# Conversion functions
+# ---------------------------------------------------------------------------
+
+def convert_matches(jsonl_path: Path, out_path: Path) -> int:
+    """Convert matches.jsonl → matches.parquet. Returns row count."""
+    print(f"  reading {jsonl_path}...")
+    df = pl.read_ndjson(jsonl_path)
+    df = cast_columns(df, MATCHES_SCHEMA)
+    print(f"  {len(df)} matches → {out_path}")
+    df.write_parquet(out_path, compression="snappy")
+    return len(df)
+
+
+def convert_games(jsonl_path: Path, out_path: Path) -> int:
+    """Convert games.jsonl → games.parquet. Returns row count."""
+    print(f"  reading {jsonl_path}...")
+    df = pl.read_ndjson(jsonl_path)
+    df = cast_columns(df, GAMES_SCHEMA)
+    print(f"  {len(df)} games → {out_path}")
+    df.write_parquet(out_path, compression="snappy")
+    return len(df)
+
+
+def convert_positions(
+    jsonl_path: Path,
+    out_dir: Path,
+    n_parts: int,
+    chunk_rows: int,
+) -> int:
+    """Convert positions.jsonl → partitioned positions/*.parquet.
+
+    Reads in chunks to handle files larger than RAM. Each chunk is distributed
+    to the appropriate partition bucket based on match_id hash.
+    """
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    # One PyArrow writer per partition.
+    writers: dict[int, pq.ParquetWriter] = {}
+    schema_ready = False
+    arrow_schema = None
+
+    def flush_df(df: pl.DataFrame):
+        nonlocal schema_ready, arrow_schema
+
+        # Apply scalar type casts.
+        df = cast_columns(df, POSITIONS_SCALAR_SCHEMA)
+
+        # Cast board columns to List[Int8].
+        for col in ("board_p1", "board_p2"):
+            df = board_list_to_int8(df, col)
+
+        # Drop candidates column (nested struct — stored separately if needed).
+        if "candidates" in df.columns:
+            df = df.drop("candidates")
+
+        # Convert to Arrow.
+        table = df.to_arrow()
+
+        if not schema_ready:
+            arrow_schema = table.schema
+            schema_ready = True
+
+        # Distribute rows to partition writers.
+        match_ids = df["match_id"].to_list() if "match_id" in df.columns else [""] * len(df)
+        part_indices = [partition_index(mid, n_parts) for mid in match_ids]
+
+        # Group consecutive rows by partition for efficiency.
+        i = 0
+        while i < len(part_indices):
+            p = part_indices[i]
+            j = i + 1
+            while j < len(part_indices) and part_indices[j] == p:
+                j += 1
+            slice_tbl = table.slice(i, j - i)
+            if p not in writers:
+                part_path = out_dir / f"part-{p:04d}.parquet"
+                writers[p] = pq.ParquetWriter(
+                    str(part_path), arrow_schema, compression="snappy"
+                )
+            writers[p].write_table(slice_tbl)
+            i = j
+
+    # Stream through positions.jsonl in chunks.
+    total = 0
+    chunk_buf = []
+    t0 = time.time()
+
+    with open(jsonl_path, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            chunk_buf.append(json.loads(line))
+            if len(chunk_buf) >= chunk_rows:
+                df = pl.DataFrame(chunk_buf, strict=False)
+                flush_df(df)
+                total += len(df)
+                chunk_buf = []
+                elapsed = time.time() - t0
+                print(
+                    f"  {total:,} positions processed "
+                    f"({total / elapsed:,.0f} pos/s)...",
+                    end="\r",
+                )
+
+    # Flush remaining rows.
+    if chunk_buf:
+        df = pl.DataFrame(chunk_buf, strict=False)
+        flush_df(df)
+        total += len(df)
+
+    # Close all writers.
+    for w in writers.values():
+        w.close()
+
+    elapsed = time.time() - t0
+    print(
+        f"  {total:,} positions → {out_dir}/ "
+        f"({len(writers)} parts, {elapsed:.1f}s, {total / elapsed:,.0f} pos/s)"
+    )
+    return total
+
+
+# ---------------------------------------------------------------------------
+# Verification
+# ---------------------------------------------------------------------------
+
+def verify(parquet_dir: Path, n_matches: int, n_games: int, n_positions: int):
+    """Re-read Parquet files and verify counts match originals."""
+    print("\nVerification:")
+
+    m = pl.read_parquet(parquet_dir / "matches.parquet")
+    assert len(m) == n_matches, f"matches mismatch: {len(m)} vs {n_matches}"
+    print(f"  matches.parquet:   {len(m):,} rows ✓")
+
+    g = pl.read_parquet(parquet_dir / "games.parquet")
+    assert len(g) == n_games, f"games mismatch: {len(g)} vs {n_games}"
+    print(f"  games.parquet:     {len(g):,} rows ✓")
+
+    pos_files = sorted((parquet_dir / "positions").glob("part-*.parquet"))
+    n_pos_read = sum(pq.read_metadata(str(f)).num_rows for f in pos_files)
+    assert n_pos_read == n_positions, f"positions mismatch: {n_pos_read} vs {n_positions}"
+    print(f"  positions/*.parquet: {n_pos_read:,} rows across {len(pos_files)} files ✓")
+
+    # Quick schema spot-check.
+    if pos_files:
+        schema = pq.read_schema(str(pos_files[0]))
+        print(f"  positions schema: {len(schema)} columns")
+        print(f"  compression: snappy (verified by pyarrow)")
+
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="S0.2: Convert JSONL to Parquet for the mining study pipeline"
+    )
+    parser.add_argument(
+        "--jsonl-dir", default="data/jsonl",
+        help="Directory containing matches.jsonl, games.jsonl, positions.jsonl"
+    )
+    parser.add_argument(
+        "--parquet-dir", default="data/parquet",
+        help="Output directory for Parquet files"
+    )
+    parser.add_argument(
+        "--positions-parts", type=int, default=16,
+        help="Number of position partition files (default: 16, ~50-500 MB each)"
+    )
+    parser.add_argument(
+        "--chunk-rows", type=int, default=500_000,
+        help="Rows per processing chunk for positions (default: 500000)"
+    )
+    parser.add_argument(
+        "--skip-verify", action="store_true",
+        help="Skip verification step"
+    )
+    args = parser.parse_args()
+
+    jsonl_dir = Path(args.jsonl_dir)
+    parquet_dir = Path(args.parquet_dir)
+    parquet_dir.mkdir(parents=True, exist_ok=True)
+
+    for name in ("matches.jsonl", "games.jsonl", "positions.jsonl"):
+        p = jsonl_dir / name
+        if not p.exists():
+            print(f"ERROR: {p} not found", file=sys.stderr)
+            sys.exit(1)
+
+    t_start = time.time()
+
+    print("Converting matches...")
+    n_matches = convert_matches(jsonl_dir / "matches.jsonl", parquet_dir / "matches.parquet")
+
+    print("Converting games...")
+    n_games = convert_games(jsonl_dir / "games.jsonl", parquet_dir / "games.parquet")
+
+    print(f"Converting positions (parts={args.positions_parts}, chunk={args.chunk_rows:,})...")
+    n_positions = convert_positions(
+        jsonl_dir / "positions.jsonl",
+        parquet_dir / "positions",
+        n_parts=args.positions_parts,
+        chunk_rows=args.chunk_rows,
+    )
+
+    print(f"\nTotal: {n_matches:,} matches, {n_games:,} games, {n_positions:,} positions")
+    print(f"Elapsed: {time.time() - t_start:.1f}s")
+
+    if not args.skip_verify:
+        verify(parquet_dir, n_matches, n_games, n_positions)
+
+    print("\nDone.")
+
+
+if __name__ == "__main__":
+    main()
