@@ -137,31 +137,39 @@ python scripts/convert_jsonl_to_parquet.py \
 
 ---
 
-### S0.3 — DuckDB Access Layer
+### S0.3 — DuckDB Access Layer ✅
 
 **Objective**: Python module exposing SQL queries on Parquet via DuckDB.
+
+**Implementation**: `scripts/bgdata.py`
 
 **Input**: Parquet files from S0.2.
 **Output**: Python module `bgdata.py` with reusable query functions.
 **Dependencies**: S0.2.
 **Complexity**: Low-Medium.
 
-**Minimal API**:
+**API implemented**:
 ```python
 class BGDatabase:
-    def __init__(self, data_dir: str)
-    def query(self, sql: str) -> pl.DataFrame
-    def get_match(self, match_id: str) -> dict
-    def get_positions(self, filters: dict) -> pl.DataFrame
-    def get_player_stats(self, player_name: str) -> dict
-    def get_tournament_stats(self, tournament: str) -> dict
-    def summary(self) -> dict  # counts, basic distributions
+    def __init__(self, data_dir: str, cache_size: int = 64)
+    def query(self, sql: str, cache: bool = False) -> pl.DataFrame
+    def get_match(self, match_id: str) -> dict        # metadata + games
+    def get_positions(self, filters: dict) -> pl.DataFrame  # scalar/range/IN
+    def get_player_stats(self, player_name: str) -> dict    # wins, avg error
+    def get_tournament_stats(self, tournament: str) -> dict # counts, top players
+    def summary(self) -> dict                         # counts, distributions
 ```
 
+**Pre-defined aggregations** (module-level functions):
+- `error_by_score(db)` — avg checker error by (away_p1, away_p2)
+- `cube_errors_by_score(db)` — cube decision errors by score
+- `top_players_by_volume(db)` — players ranked by position count
+- `equity_distribution(db)` — equity histogram with avg error per bin
+
 **Notes**:
-- DuckDB reads Parquet directly (no RAM loading)
-- LRU cache for frequent queries
-- Pre-defined queries for recurring aggregations (by player, score, tournament)
+- DuckDB views over Parquet (no RAM loading), compatible with context manager
+- LRU cache (configurable size) for repeated query results
+- `get_positions` filters support: scalar (exact), tuple (range), list (IN)
 
 ---
 
