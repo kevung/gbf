@@ -5,7 +5,7 @@
 | Phase | Status | Fiches | Notes |
 |-------|--------|--------|-------|
 | S0 Data Infrastructure  | ✅ Complete | S0.1-S0.7 | All 7 fiches done — JSONL→Parquet→DuckDB→Features→Validation→Hashing→Graph |
-| S1 Exploration           | 🔄 In Progress | S1.1-S1.8 | S1.1 ✅ S1.2 ✅ S1.3 ✅ (cluster_positions.py); S1.4-S1.8 planned |
+| S1 Exploration           | 🔄 In Progress | S1.1-S1.8 | S1.1-S1.4 ✅; S1.5-S1.8 planned |
 | S2 Player Profiling      | ⬜ Planned | S2.1-S2.4 | Metrics, clustering, ranking, strengths/weaknesses |
 | S3 Practical Rules       | ⬜ Planned | S3.1-S3.6 | Cube heatmaps, MET, thresholds, heuristics, gammon, model |
 | S4 Web Dashboard         | ⬜ Planned | S4.1-S4.7 | Views, architecture, board component, API, frontend, trajectories |
@@ -144,7 +144,7 @@ matches), Parquet + DuckDB queries.
 | S1.1 ✅ | Global descriptive statistics | S0.4, S0.5 | Low |
 | S1.2 ✅ | Feature-error correlation analysis | S0.4 | Medium |
 | S1.3 ✅ | Position clustering (PCA/UMAP/HDBSCAN) | S0.4 | High |
-| S1.4 | Anomaly detection & trap positions | S1.3 | Medium |
+| S1.4 ✅ | Anomaly detection & trap positions | S1.3 | Medium |
 | S1.5 | Position volatility analysis | S0.4 | Medium |
 | S1.6 | Dice structure analysis | S0.4 | Low-Med |
 | S1.7 | Temporal & sequential analysis (fatigue, tilt) | S0.3 | Medium |
@@ -159,8 +159,8 @@ split, stratification by phase / away score bracket / cube owner. 8 CSV outputs.
 **S1.3** — StandardScaler → PCA (20 comp) → UMAP (2D) → HDBSCAN. Checker and
 cube clustered separately. Outputs: labels Parquet, profile CSVs, PCA variance.
 
-**S1.4** — Blunders > 0.100, recurring patterns within clusters, error type
-classification, Isolation Forest / LOF for structural outliers. Top 50 patterns.
+**S1.4** — Blunder catalogue (error > 0.100) by cluster, error bucket distribution,
+Isolation Forest structural outliers. Per-cluster blunder rate + anomaly score.
 
 **S1.5** — Volatility = std dev of candidate equities, best/2nd-best gap,
 correlation with phase/pip/blots/score, high-volatility → more errors?

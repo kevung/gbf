@@ -138,26 +138,40 @@ python scripts/cluster_positions.py \
 
 ---
 
-### S1.4 — Anomaly Detection & Trap Positions
+### S1.4 — Anomaly Detection & Trap Positions ✅
 
 **Objective**: Find positions where human error is systematically highest
 — the "trap" positions.
 
-**Input**: `positions_enriched` + clusters (S1.3).
-**Output**: Catalogue of trap positions, common pattern analysis.
+**Implementation**: `scripts/detect_anomalies.py`
+
+**Input**: `positions_enriched` (S0.4) + cluster files (S1.3).
+**Output**: Blunder catalogues, cluster blunder rates, Isolation Forest outliers.
 **Dependencies**: S1.3.
 **Complexity**: Medium.
 
-**Method**:
-1. Identify positions with error > 0.100 (major blunders)
-2. Among these, find those in similar structures (same cluster, close
-   features) → recurring blunders vs unique blunders
-3. For recurring blunders: extract common pattern (e.g., "incorrect take
-   at 3-away 5-away with high gammon threat")
-4. Compare move played vs optimal move: what type of error? (too aggressive?
-   too defensive? gammon misjudgment?)
-5. Isolation Forest or Local Outlier Factor on features to detect
-   structurally unusual positions
+**Methods implemented**:
+1. Blunder identification: error > `--blunder-threshold` (default 0.100)
+2. Cluster-based pattern analysis: blunder rate + mean/max error per cluster;
+   each cluster described by dominant features (phase, pip, gammon, prime)
+3. Error bucket distribution: tiny (<0.025) / small / medium / blunder (>0.100)
+4. Isolation Forest (`sklearn.ensemble.IsolationForest`, configurable
+   contamination + n_estimators) on scaled features → structural outlier detection
+5. Blunder catalogue: top N×10 worst blunders with position_id, moves, error,
+   cluster, score context
 
-**Deliverable**: top 50 most frequent blunder patterns with examples and
-explanations.
+**Output files** (per decision type `{type}`):
+- `blunder_by_cluster_{type}.csv` — blunder count/rate/mean-error per cluster
+- `blunder_catalogue_{type}.csv` — top blunders sorted by error descending
+- `outliers_{type}.csv` — Isolation Forest outliers with anomaly score
+- `error_buckets_{type}.csv` — error bucket distribution
+
+**Usage**:
+```bash
+python scripts/detect_anomalies.py \
+  --enriched data/parquet/positions_enriched \
+  --clusters data/clusters \
+  [--output data/anomalies] [--sample 500000] \
+  [--blunder-threshold 0.100] [--contamination 0.05] \
+  [--top-n 50] [--n-estimators 100] [--types checker cube]
+```
