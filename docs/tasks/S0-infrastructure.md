@@ -224,23 +224,40 @@ python scripts/compute_features.py \
 
 ---
 
-### S0.5 — Data Quality Validation
+### S0.5 — Data Quality Validation ✅
 
 **Objective**: Ensure data consistency and quality before analysis.
 
-**Input**: All Parquet tables.
-**Output**: Quality report (notebook or markdown).
+**Implementation**: `scripts/validate_data.py`
+
+**Input**: All Parquet tables (S0.2) + enriched positions (S0.4, optional).
+**Output**: Structured console report; exits 1 if any FAIL-level check fails.
 **Dependencies**: S0.2, S0.4.
 **Complexity**: Low.
 
-**Checks**:
-- Referential integrity: every game_id in positions exists in games, etc.
-- Distributions: no outlier probabilities (win + lose ≈ 1), equities in [-3, +3]
-- Completeness: percentage of positions with full analysis, positions without candidates
-- Valid boards: 15 checkers per player, no impossible negative values
-- Temporal coherence: moves are ordered, scores evolve logically
-- Duplicates: no duplicate positions
-- Volume statistics: distributions by tournament, player, year
+**Checks implemented (8 sections)**:
+1. Referential integrity — game_id/match_id foreign keys across tables
+2. Probability sanity — eval_win in [0,1], gammon ≤ win rate
+3. Equity range — eval_equity in [-3,+3], mean ≈ 0, error in [0,3]
+4. Board validity — 15 checkers per player, no negatives, sum=30
+5. Completeness — % positions with analysis, cube decisions have action
+6. Duplicates — no duplicate position_id or match_id
+7. Move ordering — move_number monotone within each game
+8. Score coherence — away > 0 for match-play, points_won ≥ 1
+
+Volume statistics: counts by decision type, top tournaments, score pairs.
+Enriched features: column presence, pip ≥ 0, match_phase ∈ {0,1,2}, gammon_threat ∈ [0,1].
+
+**Bug fixed (S0.1)**: `score_away_p1/p2` in games.jsonl stored `InitialScore`
+(raw points won) instead of away score (`match_length - initial_score`).
+Fixed in `cmd/export-jsonl/main.go`.
+
+**Usage**:
+```bash
+python scripts/validate_data.py \
+  --parquet-dir data/parquet \
+  [--enriched data/parquet/positions_enriched]
+```
 
 ---
 

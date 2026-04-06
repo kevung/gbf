@@ -202,7 +202,7 @@ func processFile(path string) struct {
 	for gi, game := range match.Games {
 		gameID := fmt.Sprintf("%s_game_%02d", matchID, gi+1)
 
-		gameRec := buildGameRecord(&game, gameID, matchID)
+		gameRec := buildGameRecord(&game, gameID, matchID, match.Metadata.MatchLength)
 		gb, err := json.Marshal(gameRec)
 		if err != nil {
 			continue
@@ -298,12 +298,20 @@ type gameRecord struct {
 	Backgammon  bool   `json:"backgammon"`
 }
 
-func buildGameRecord(g *gbf.Game, gameID, matchID string) gameRecord {
+func buildGameRecord(g *gbf.Game, gameID, matchID string, matchLength int) gameRecord {
 	winner := 0
 	if g.Winner == gbf.PlayerX {
 		winner = 1
 	} else if g.Winner == gbf.PlayerO {
 		winner = 2
+	}
+
+	// Compute away scores: points remaining to win.
+	// For money games (matchLength=0), away scores are not meaningful; use 0.
+	awayP1, awayP2 := 0, 0
+	if matchLength > 0 {
+		awayP1 = matchLength - g.InitialScore[0]
+		awayP2 = matchLength - g.InitialScore[1]
 	}
 
 	// Derive gammon/backgammon from last position's cube value.
@@ -315,8 +323,8 @@ func buildGameRecord(g *gbf.Game, gameID, matchID string) gameRecord {
 		GameID:      gameID,
 		MatchID:     matchID,
 		GameNumber:  g.GameNumber,
-		ScoreAwayP1: g.InitialScore[0],
-		ScoreAwayP2: g.InitialScore[1],
+		ScoreAwayP1: awayP1,
+		ScoreAwayP2: awayP2,
 		Crawford:    g.Crawford,
 		Winner:      winner,
 		PointsWon:   g.PointsWon,

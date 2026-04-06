@@ -4,7 +4,7 @@
 
 | Phase | Status | Fiches | Notes |
 |-------|--------|--------|-------|
-| S0 Data Infrastructure  | 🔄 In Progress | S0.1-S0.7 | S0.1 ✅ S0.2 ✅ S0.3 ✅ S0.4 ✅ (scripts/compute_features.py); S0.5-S0.7 planned |
+| S0 Data Infrastructure  | 🔄 In Progress | S0.1-S0.7 | S0.1 ✅ S0.2 ✅ S0.3 ✅ S0.4 ✅ S0.5 ✅ (scripts/validate_data.py); S0.6-S0.7 planned |
 | S1 Exploration           | ⬜ Planned | S1.1-S1.8 | Stats, correlation, clustering, anomalies, volatility, topology |
 | S2 Player Profiling      | ⬜ Planned | S2.1-S2.4 | Metrics, clustering, ranking, strengths/weaknesses |
 | S3 Practical Rules       | ⬜ Planned | S3.1-S3.6 | Cube heatmaps, MET, thresholds, heuristics, gammon, model |
