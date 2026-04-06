@@ -100,36 +100,41 @@ python scripts/correlation_analysis.py \
 
 ---
 
-### S1.3 — Position Clustering
+### S1.3 — Position Clustering ✅
 
 **Objective**: Identify position families and characterize each cluster.
 
-**Input**: `positions_enriched` (derived features).
-**Output**: Cluster labels per position, cluster profile descriptions.
+**Implementation**: `scripts/cluster_positions.py`
+
+**Input**: `positions_enriched` directory (S0.4).
+**Output**: Cluster labels Parquet + profile CSVs + PCA variance CSVs.
 **Dependencies**: S0.4.
 **Complexity**: High.
 
-**Method**:
-1. Feature selection: use interpretable features (not raw board), normalize
-2. Dimensionality reduction: PCA first (understand variance), then UMAP
-   (visualization)
-3. Clustering: HDBSCAN (auto-detects cluster count, handles noise)
-4. Start on sample (1M positions), extend if patterns are stable
-5. Per cluster: average statistics, mean error, prototypical examples
+**Pipeline** (per decision type: checker + cube independently):
+1. Feature selection: 27 interpretable features (no raw board, no eval leakage)
+   → StandardScaler normalization
+2. PCA: up to 20 components, prints explained variance (90%/95% thresholds)
+3. UMAP: 2D embedding (n_neighbors=15, min_dist=0.1, euclidean, low_memory)
+4. HDBSCAN: auto cluster count, `eom` selection, configurable min_cluster_size
+5. Per cluster: mean error, mean equity, mean of all features, count
+6. Heuristic label from dominant features: race/bearoff/blitz/priming/back-game/
+   holding/scramble
 
-**Expected clusters** (hypotheses to validate):
-- Pure race positions
-- Blitz positions
-- Priming positions
-- Back games
-- Holding positions
-- Bearing off with contact
-- Scramble / complex positions
+**Output files** (per decision type `{type}`):
+- `clusters_{type}.parquet` — position_id, cluster label, umap_x, umap_y
+- `cluster_profiles_{type}.csv` — per-cluster mean features + error stats
+- `pca_variance_{type}.csv` — component-by-component explained variance
 
-**Important**: cluster checker positions and cube positions separately.
-
-**Deliverable**: annotated UMAP map + cluster descriptions + mean error
-per cluster.
+**Usage**:
+```bash
+python scripts/cluster_positions.py \
+  --enriched data/parquet/positions_enriched \
+  [--output data/clusters] [--sample 500000] \
+  [--n-neighbors 15] [--min-dist 0.1] \
+  [--min-cluster-size 200] [--min-samples 50] \
+  [--pca-components 20] [--types checker cube]
+```
 
 ---
 
