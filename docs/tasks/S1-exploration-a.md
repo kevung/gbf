@@ -12,24 +12,44 @@ S0.4 (feature engineering), S0.5 (data quality validation).
 
 ## Sub-steps
 
-### S1.1 — Global Descriptive Statistics
+### S1.1 — Global Descriptive Statistics ✅
 
 **Objective**: Comprehensive statistical overview of the database.
 
-**Input**: Enriched tables (S0.4).
-**Output**: Jupyter notebook with visualizations + summary report.
+**Implementation**: `scripts/descriptive_stats.py`
+
+**Input**: Parquet tables (S0.2) + enriched positions (S0.4, optional).
+**Output**: Structured console report + CSV summaries in `--output` dir.
 **Dependencies**: S0.4, S0.5.
 **Complexity**: Low.
 
-**Analyses**:
-- Error distribution (histogram): by type (checker vs cube), by magnitude
-- Equity distribution across all positions
-- Game phase distribution (contact/race/bearoff) in the corpus
-- Away score frequency across matches
-- Match length distribution (number of games) and game length (number of moves)
-- Top tournaments by volume, top players by match count
-- Temporal evolution (if dates span multiple years)
-- Cube value distribution when cube decisions occur
+**Analyses implemented (11 sections)**:
+- Dataset overview: counts per table, decision type split
+- Error distribution: mean/std/percentiles (p50–p99), magnitude buckets
+  (perfect / tiny / small / medium / blunder >0.100)
+- Equity distribution: mean/std/range, histogram by bucket ([-3,+3])
+- Game phase distribution: contact/race/bearoff with bar chart
+- Away score frequency: top 20 score pairs from games table
+- Match & game lengths: min/max/avg/median + match_length distribution
+- Top 20 tournaments and top 20 players by position volume
+- Temporal evolution: matches and avg games per year
+- Cube value distribution + cube action breakdown
+- Gammon & backgammon rates + avg gammon threat/risk
+
+**CSV outputs** (for notebooks / S3 / S4):
+`error_distribution_checker.csv`, `equity_distribution.csv`,
+`phase_distribution.csv`, `score_distribution.csv`,
+`match_length_distribution.csv`, `tournament_volumes.csv`,
+`player_volumes.csv`, `temporal_evolution.csv`,
+`cube_value_distribution.csv`
+
+**Usage**:
+```bash
+python scripts/descriptive_stats.py \
+  --parquet-dir data/parquet \
+  [--enriched data/parquet/positions_enriched] \
+  [--output data/stats]
+```
 
 ---
 

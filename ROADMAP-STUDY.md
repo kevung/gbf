@@ -5,7 +5,7 @@
 | Phase | Status | Fiches | Notes |
 |-------|--------|--------|-------|
 | S0 Data Infrastructure  | ✅ Complete | S0.1-S0.7 | All 7 fiches done — JSONL→Parquet→DuckDB→Features→Validation→Hashing→Graph |
-| S1 Exploration           | ⬜ Planned | S1.1-S1.8 | Stats, correlation, clustering, anomalies, volatility, topology |
+| S1 Exploration           | 🔄 In Progress | S1.1-S1.8 | S1.1 ✅ (scripts/descriptive_stats.py); S1.2-S1.8 planned |
 | S2 Player Profiling      | ⬜ Planned | S2.1-S2.4 | Metrics, clustering, ranking, strengths/weaknesses |
 | S3 Practical Rules       | ⬜ Planned | S3.1-S3.6 | Cube heatmaps, MET, thresholds, heuristics, gammon, model |
 | S4 Web Dashboard         | ⬜ Planned | S4.1-S4.7 | Views, architecture, board component, API, frontend, trajectories |
