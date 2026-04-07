@@ -11,15 +11,30 @@ S0.4 (feature engineering), S1.3 (position clusters for S2.4).
 
 ## Sub-steps
 
-### S2.1 — Player Profiling Metrics
+### S2.1 — Player Profiling Metrics ✅
 
-**Objective**: Define and compute ~20 metrics characterizing each player's
+**Objective**: Define and compute ~22 metrics characterizing each player's
 profile.
 
-**Input**: Enriched tables, aggregated per player.
-**Output**: `player_profiles` table — one row per player, ~20 metrics.
-**Dependencies**: S0.4.
+**Implementation**: `scripts/analyze_player_profiles.py`
+
+**Input**: `positions_enriched/` (S0.4), `matches.parquet`, `games.parquet`.
+**Output**:
+- `player_profiles.parquet` / `.csv` — one row per player, ~22 metrics
+- `cube_error_by_score.csv` — cube error × away-score bracket (top 50 players)
+- `player_summary.txt` — ranked quick views
+
+**Dependencies**: S0.4, matches.parquet (for player name resolution).
 **Complexity**: Medium.
+
+**Usage**:
+```
+python scripts/analyze_player_profiles.py \
+    --enriched data/parquet/positions_enriched \
+    --parquet  data/parquet \
+    --output   data/player_profiles \
+    --min-matches 20
+```
 
 **Global performance metrics**:
 - `total_matches`, `total_positions`: volume

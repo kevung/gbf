@@ -6,7 +6,7 @@
 |-------|--------|--------|-------|
 | S0 Data Infrastructure  | ✅ Complete | S0.1-S0.7 | All 7 fiches done — JSONL→Parquet→DuckDB→Features→Validation→Hashing→Graph |
 | S1 Exploration           | ✅ Complete | S1.1-S1.8 | All 8 fiches done — Stats→Correlation→Clustering→Anomaly→Volatility→Dice→Temporal→GraphTopology |
-| S2 Player Profiling      | ⬜ Planned | S2.1-S2.4 | Metrics, clustering, ranking, strengths/weaknesses |
+| S2 Player Profiling      | 🔄 In progress | S2.1-S2.4 | S2.1 done — player_profiles table (~22 metrics) |
 | S3 Practical Rules       | ⬜ Planned | S3.1-S3.6 | Cube heatmaps, MET, thresholds, heuristics, gammon, model |
 | S4 Web Dashboard         | ⬜ Planned | S4.1-S4.7 | Views, architecture, board component, API, frontend, trajectories |
 
@@ -185,14 +185,18 @@ Implementation: `scripts/analyze_graph_topology.py`.
 
 | Fiche | Objective | Needs | Complexity |
 |-------|-----------|-------|------------|
-| S2.1 | Player profiling metrics (~20 metrics) | S0.4 | Medium |
+| S2.1 ✅ | Player profiling metrics (~22 metrics) | S0.4 | Medium |
 | S2.2 | Player clustering by profile (archetypes) | S2.1 | Medium |
 | S2.3 | Benchmarking & player ranking | S2.1 | Medium |
 | S2.4 | Individual strengths/weaknesses analysis | S2.1, S1.3 | Medium |
 
-**S2.1** — Global performance (avg error, PR rating), phase profile
-(contact/race/bearoff), cube profile (missed doubles, wrong takes/passes),
-tactical (aggression, risk), consistency (std dev, streaks). Filter: ≥ 20 matches.
+**S2.1** ✅ — Global performance (avg error, PR rating), phase profile
+(contact/race/bearoff/opening/midgame/endgame), cube profile (missed doubles,
+wrong takes/passes, error by score bracket), tactical (aggression_index,
+risk_appetite), consistency (error_std, streak_tendency).
+Implementation: `scripts/analyze_player_profiles.py`.
+Outputs: `player_profiles.parquet`, `player_profiles.csv`,
+`cube_error_by_score.csv`, `player_summary.txt`. Filter: ≥ 20 matches.
 
 **S2.2** — Z-score normalization, PCA, k-means/HDBSCAN, radar charts.
 Archetypes: technician, cubist, sprinter, warrior, steady, erratic.
