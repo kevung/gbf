@@ -11,9 +11,9 @@ Serves the 7 views defined in S4.1 on top of 160M-position Parquet data.
 |---|---|---|
 | **Backend** | Python / FastAPI | Same ecosystem as analysis pipeline; DuckDB Python driver mature |
 | **Database** | DuckDB (embedded) | Queries Parquet files directly; no ETL; columnar; fast aggregations |
-| **Frontend** | React 18 + TypeScript | Component model suits the board + chart mix |
-| **Charts** | Recharts (simple) + D3.js (heatmap) | Recharts for standard charts, D3 for cube heatmap grid |
-| **Board rendering** | SVG (React component) | Resolution-independent; CSS-animatable; no canvas boilerplate |
+| **Frontend** | Svelte 5 + SvelteKit + TypeScript | Compiled, minimal runtime; reactive stores replace Context |
+| **Charts** | LayerCake (Svelte) + D3.js (heatmap) | LayerCake for radar/line/bar; D3 for fine-grained heatmap SVG |
+| **Board rendering** | SVG (Svelte component) | Resolution-independent; CSS-animatable; no canvas boilerplate |
 | **Trajectory map** | deck.gl (WebGL) | Handles millions of points; ScatterplotLayer + PathLayer built-in |
 | **Styling** | Tailwind CSS | Utility-first; no runtime overhead; purge unused classes |
 | **Deployment** | Docker (single image) | Portable; static frontend served by FastAPI `StaticFiles` |
@@ -24,7 +24,7 @@ Serves the 7 views defined in S4.1 on top of 160M-position Parquet data.
 
 ```
 ┌──────────────────────────────────────────────────────────┐
-│  Layer 5 — Browser (React SPA)                           │
+│  Layer 5 — Browser (SvelteKit SPA)                       │
 │  8 pages · board component · deck.gl map                 │
 └────────────────────────┬─────────────────────────────────┘
                          │ HTTP/JSON  REST
@@ -78,12 +78,12 @@ gbf-dashboard/
     src/
       pages/              # 8 page components
       components/
-        Board.tsx          # S4.3 board component
-        CubeHeatmap.tsx    # D3 heatmap grid
-        RadarChart.tsx     # Recharts radar
-        TrajectoryMap.tsx  # deck.gl map
+        Board.svelte        # S4.3 board component
+        CubeHeatmap.svelte  # D3 heatmap grid
+        RadarChart.svelte   # LayerCake radar
+        TrajectoryMap.svelte # deck.gl map
       api/                # typed fetch wrappers
-      store/              # React Context (filters, selected player)
+      store/              # Svelte stores (filters, selected player)
     public/
       tiles/              # pre-rendered tile pyramid (zoom 0–7)
   docker/
@@ -104,7 +104,7 @@ Browser filter form
   → FastAPI router: build WHERE clause with bind params
   → DuckDB: SELECT ... FROM positions_enriched/*.parquet WHERE ...
   → Pydantic model → JSON response
-  → React table component
+  → Svelte table component
 ```
 
 ### Pre-computed path (heatmaps, rankings, thresholds)
@@ -225,8 +225,8 @@ WORKDIR /app
 COPY backend/requirements.txt .
 RUN pip install fastapi uvicorn duckdb polars lightgbm
 
-# Frontend build (pre-built, copy dist/)
-COPY frontend/dist/ static/
+# Frontend build (pre-built via SvelteKit static adapter)
+COPY frontend/build/ static/
 
 # App + data
 COPY backend/ backend/
@@ -262,12 +262,12 @@ python backend/materialise.py --data-dir ./data
 # 2. Start backend (hot-reload)
 uvicorn backend.main:app --reload --port 8000
 
-# 3. Start frontend dev server
-cd frontend && npm run dev      # Vite, port 5173, proxies /api → 8000
+# 3. Start frontend dev server (SvelteKit + Vite)
+cd frontend && npm run dev      # port 5173, proxies /api → 8000
 
 # 4. Build for production
-cd frontend && npm run build    # outputs dist/
-cp -r frontend/dist backend/static/
+cd frontend && npm run build    # SvelteKit static adapter → build/
+cp -r frontend/build backend/static/
 
 # 5. Docker build
 docker compose up --build

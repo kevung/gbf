@@ -322,10 +322,10 @@ aggregation tables) to meet < 200 ms query budget on 160M positions.
 Specification: `docs/dashboard-views.md`.
 
 **S4.2** ✅ — FastAPI (Python) backend + DuckDB embedded querying Parquet
-files directly (no ETL). React 18 + TypeScript frontend, Recharts + D3.js
-for charts, deck.gl (WebGL) for trajectory map, SVG board component. 5-layer
-architecture: Parquet data → DuckDB views + materialised tables → FastAPI
-routers → React SPA → browser. Pre-computation batch script (`materialise.py`)
+files directly (no ETL). Svelte 5 + SvelteKit + TypeScript frontend,
+LayerCake + D3.js for charts, deck.gl (WebGL) for trajectory map, SVG board
+component. 5-layer architecture: Parquet data → DuckDB views + materialised
+tables → FastAPI routers → SvelteKit SPA → browser. Pre-computation batch script (`materialise.py`)
 builds 7 aggregation tables + tile pyramid (one-time, 5–15 min). Single Docker
 container, performance budget defined per query type (< 50–500 ms).
 Architecture: `docs/architecture-dashboard.md`.
