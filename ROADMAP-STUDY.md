@@ -1,12 +1,12 @@
 # Backgammon Mining Study — Roadmap
 
-## Current Status — 2026-04-07
+## Current Status — 2026-04-09
 
 | Phase | Status | Fiches | Notes |
 |-------|--------|--------|-------|
 | S0 Data Infrastructure  | ✅ Complete | S0.1-S0.7 | All 7 fiches done — JSONL→Parquet→DuckDB→Features→Validation→Hashing→Graph |
 | S1 Exploration           | ✅ Complete | S1.1-S1.8 | All 8 fiches done — Stats→Correlation→Clustering→Anomaly→Volatility→Dice→Temporal→GraphTopology |
-| S2 Player Profiling      | 🔄 In progress | S2.1-S2.4 | S2.1 done — player_profiles table (~22 metrics) |
+| S2 Player Profiling      | 🔄 In progress | S2.1-S2.4 | S2.1 ✅ metrics, S2.2 ✅ clustering/archetypes, S2.3-S2.4 planned |
 | S3 Practical Rules       | ⬜ Planned | S3.1-S3.6 | Cube heatmaps, MET, thresholds, heuristics, gammon, model |
 | S4 Web Dashboard         | ⬜ Planned | S4.1-S4.7 | Views, architecture, board component, API, frontend, trajectories |
 
@@ -186,7 +186,7 @@ Implementation: `scripts/analyze_graph_topology.py`.
 | Fiche | Objective | Needs | Complexity |
 |-------|-----------|-------|------------|
 | S2.1 ✅ | Player profiling metrics (~22 metrics) | S0.4 | Medium |
-| S2.2 | Player clustering by profile (archetypes) | S2.1 | Medium |
+| S2.2 ✅ | Player clustering by profile (archetypes) | S2.1 | Medium |
 | S2.3 | Benchmarking & player ranking | S2.1 | Medium |
 | S2.4 | Individual strengths/weaknesses analysis | S2.1, S1.3 | Medium |
 
@@ -198,8 +198,12 @@ Implementation: `scripts/analyze_player_profiles.py`.
 Outputs: `player_profiles.parquet`, `player_profiles.csv`,
 `cube_error_by_score.csv`, `player_summary.txt`. Filter: ≥ 20 matches.
 
-**S2.2** — Z-score normalization, PCA, k-means/HDBSCAN, radar charts.
-Archetypes: technician, cubist, sprinter, warrior, steady, erratic.
+**S2.2** ✅ — Z-score normalization → PCA (up to 10 components) → K-means or
+HDBSCAN on up to 14 profile metrics. Archetypes: Steady, Technician, Cubist,
+Sprinter, Warrior, Erratic (data-driven naming from centroid characteristics).
+Implementation: `scripts/cluster_players.py`.
+Outputs: `player_clusters.parquet`, `cluster_profiles.csv`, `cluster_pca.csv`,
+`archetype_descriptions.txt`.
 
 **S2.3** — PR ranking with confidence intervals, per-dimension ranking,
 radar comparisons, temporal evolution, PR vs results, over/under-performers.
