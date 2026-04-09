@@ -307,7 +307,7 @@ Outputs: `cube_model_metrics.csv`, `cube_model_feature_importance.csv`,
 | Fiche | Objective | Needs | Complexity |
 |-------|-----------|-------|------------|
 | S4.1 ✅ | User view definitions (7 views) | S1-S3 results | Medium |
-| S4.2 | Web application architecture | S4.1 | Medium |
+| S4.2 ✅ | Web application architecture | S4.1 | Medium |
 | S4.3 | Board visualization component | — | Medium |
 | S4.4 | Data API endpoints | S0.3, S4.2 | Medium |
 | S4.5 | Frontend implementation | S4.1, S4.3, S4.4 | High |
@@ -321,8 +321,14 @@ patterns defined (7 inter-view links). Pre-computed materialisation list (9
 aggregation tables) to meet < 200 ms query budget on 160M positions.
 Specification: `docs/dashboard-views.md`.
 
-**S4.2** — Go/Python (FastAPI) backend, DuckDB embedded, React + D3/Recharts,
-SVG/Canvas board, Docker, pre-computed materialized aggregations.
+**S4.2** ✅ — FastAPI (Python) backend + DuckDB embedded querying Parquet
+files directly (no ETL). React 18 + TypeScript frontend, Recharts + D3.js
+for charts, deck.gl (WebGL) for trajectory map, SVG board component. 5-layer
+architecture: Parquet data → DuckDB views + materialised tables → FastAPI
+routers → React SPA → browser. Pre-computation batch script (`materialise.py`)
+builds 7 aggregation tables + tile pyramid (one-time, 5–15 min). Single Docker
+container, performance budget defined per query type (< 50–500 ms).
+Architecture: `docs/architecture-dashboard.md`.
 
 **S4.3** — 24-point + bar board, stacked checkers (counter > 5), cube,
 away scores, dice, move arrows, responsive. Parallelizable.
