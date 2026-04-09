@@ -6,7 +6,7 @@
 |-------|--------|--------|-------|
 | S0 Data Infrastructure  | ✅ Complete | S0.1-S0.7 | All 7 fiches done — JSONL→Parquet→DuckDB→Features→Validation→Hashing→Graph |
 | S1 Exploration           | ✅ Complete | S1.1-S1.8 | All 8 fiches done — Stats→Correlation→Clustering→Anomaly→Volatility→Dice→Temporal→GraphTopology |
-| S2 Player Profiling      | 🔄 In progress | S2.1-S2.4 | S2.1 ✅ metrics, S2.2 ✅ clustering/archetypes, S2.3-S2.4 planned |
+| S2 Player Profiling      | 🔄 In progress | S2.1-S2.4 | S2.1 ✅ metrics, S2.2 ✅ clustering, S2.3 ✅ ranking, S2.4 planned |
 | S3 Practical Rules       | ⬜ Planned | S3.1-S3.6 | Cube heatmaps, MET, thresholds, heuristics, gammon, model |
 | S4 Web Dashboard         | ⬜ Planned | S4.1-S4.7 | Views, architecture, board component, API, frontend, trajectories |
 
@@ -187,7 +187,7 @@ Implementation: `scripts/analyze_graph_topology.py`.
 |-------|-----------|-------|------------|
 | S2.1 ✅ | Player profiling metrics (~22 metrics) | S0.4 | Medium |
 | S2.2 ✅ | Player clustering by profile (archetypes) | S2.1 | Medium |
-| S2.3 | Benchmarking & player ranking | S2.1 | Medium |
+| S2.3 ✅ | Benchmarking & player ranking | S2.1 | Medium |
 | S2.4 | Individual strengths/weaknesses analysis | S2.1, S1.3 | Medium |
 
 **S2.1** ✅ — Global performance (avg error, PR rating), phase profile
@@ -205,8 +205,14 @@ Implementation: `scripts/cluster_players.py`.
 Outputs: `player_clusters.parquet`, `cluster_profiles.csv`, `cluster_pca.csv`,
 `archetype_descriptions.txt`.
 
-**S2.3** — PR ranking with confidence intervals, per-dimension ranking,
-radar comparisons, temporal evolution, PR vs results, over/under-performers.
+**S2.3** ✅ — PR ranking with 95% CI (analytic normal approximation), 8
+per-dimension rankings (contact, race, bearoff, cube, opening, consistency,
+blunder avoidance), Pearson correlation PR vs win-rate, over/under-performers
+(OLS residuals), temporal match-activity by year.
+Implementation: `scripts/rank_players.py`.
+Outputs: `player_ranking.parquet`, `player_ranking.csv`,
+`dimension_rankings.csv`, `pr_vs_wins.csv`, `over_under_performers.csv`,
+`temporal_pr.csv`, `ranking_report.txt`.
 
 **S2.4** — Error per position cluster vs population average, z-score per
 cluster → strengths/weaknesses. Same for away score zones. Auto-report template.
