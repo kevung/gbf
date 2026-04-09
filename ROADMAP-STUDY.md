@@ -308,7 +308,7 @@ Outputs: `cube_model_metrics.csv`, `cube_model_feature_importance.csv`,
 |-------|-----------|-------|------------|
 | S4.1 ✅ | User view definitions (7 views) | S1-S3 results | Medium |
 | S4.2 ✅ | Web application architecture | S4.1 | Medium |
-| S4.3 | Board visualization component | — | Medium |
+| S4.3 ✅ | Board visualization component | — | Medium |
 | S4.4 | Data API endpoints | S0.3, S4.2 | Medium |
 | S4.5 | Frontend implementation | S4.1, S4.3, S4.4 | High |
 | S4.6 | Testing & deployment | S4.5 | Medium |
@@ -330,8 +330,14 @@ builds 7 aggregation tables + tile pyramid (one-time, 5–15 min). Single Docker
 container, performance budget defined per query type (< 50–500 ms).
 Architecture: `docs/architecture-dashboard.md`.
 
-**S4.3** — 24-point + bar board, stacked checkers (counter > 5), cube,
-away scores, dice, move arrows, responsive. Parallelizable.
+**S4.3** ✅ — Svelte 5 SVG component. Input: `board[0..25]` (positive=p1,
+negative=p2, index 0/25=bar), `cube_value/owner`, `away_p1/p2`, `dice`,
+`moves`, `flip`. Features: 24 triangular points (alternating red/gold),
+stacked checkers up to 5 (overflow badge shows count), bar strip, bear-off
+strip (count inferred from 15-on_board-bar), cube (centred/p1/p2), dice with
+pip rendering, move arrows (SVG path + arrowhead marker), point number labels,
+player away-score overlays. Responsive via `width:100%` SVG viewBox.
+Implementation: `frontend/src/components/Board.svelte`.
 
 **S4.4** — REST endpoints: players, tournaments, heatmaps, positions,
 cube thresholds, stats/rankings, clusters, map/density/trajectories.
