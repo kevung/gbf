@@ -306,7 +306,7 @@ Outputs: `cube_model_metrics.csv`, `cube_model_feature_importance.csv`,
 
 | Fiche | Objective | Needs | Complexity |
 |-------|-----------|-------|------------|
-| S4.1 | User view definitions (7 views) | S1-S3 results | Medium |
+| S4.1 ✅ | User view definitions (7 views) | S1-S3 results | Medium |
 | S4.2 | Web application architecture | S4.1 | Medium |
 | S4.3 | Board visualization component | — | Medium |
 | S4.4 | Data API endpoints | S0.3, S4.2 | Medium |
@@ -314,9 +314,12 @@ Outputs: `cube_model_metrics.csv`, `cube_model_feature_importance.csv`,
 | S4.6 | Testing & deployment | S4.5 | Medium |
 | S4.7 | Position map & trajectory explorer | S0.6-7, S1.3, S1.8, S4.3 | Very High |
 
-**S4.1** — 7 views: database explorer, error map (cube heatmap), player
-profile (radar + comparison), position catalogue, cube helper, global stats,
-trajectory explorer (UMAP map).
+**S4.1** ✅ — Functional specifications for all 7 dashboard views, grounded
+in S1–S3 outputs. Each view documents: data sources (Parquet/CSV inputs),
+UI components, interactions, and required API endpoints. Cross-view navigation
+patterns defined (7 inter-view links). Pre-computed materialisation list (9
+aggregation tables) to meet < 200 ms query budget on 160M positions.
+Specification: `docs/dashboard-views.md`.
 
 **S4.2** — Go/Python (FastAPI) backend, DuckDB embedded, React + D3/Recharts,
 SVG/Canvas board, Docker, pre-computed materialized aggregations.
