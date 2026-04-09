@@ -6,7 +6,7 @@
 |-------|--------|--------|-------|
 | S0 Data Infrastructure  | ✅ Complete | S0.1-S0.7 | All 7 fiches done — JSONL→Parquet→DuckDB→Features→Validation→Hashing→Graph |
 | S1 Exploration           | ✅ Complete | S1.1-S1.8 | All 8 fiches done — Stats→Correlation→Clustering→Anomaly→Volatility→Dice→Temporal→GraphTopology |
-| S2 Player Profiling      | 🔄 In progress | S2.1-S2.4 | S2.1 ✅ metrics, S2.2 ✅ clustering, S2.3 ✅ ranking, S2.4 planned |
+| S2 Player Profiling      | ✅ Complete | S2.1-S2.4 | All 4 fiches done — Metrics→Clustering→Ranking→Strengths/Weaknesses |
 | S3 Practical Rules       | ⬜ Planned | S3.1-S3.6 | Cube heatmaps, MET, thresholds, heuristics, gammon, model |
 | S4 Web Dashboard         | ⬜ Planned | S4.1-S4.7 | Views, architecture, board component, API, frontend, trajectories |
 
@@ -188,7 +188,7 @@ Implementation: `scripts/analyze_graph_topology.py`.
 | S2.1 ✅ | Player profiling metrics (~22 metrics) | S0.4 | Medium |
 | S2.2 ✅ | Player clustering by profile (archetypes) | S2.1 | Medium |
 | S2.3 ✅ | Benchmarking & player ranking | S2.1 | Medium |
-| S2.4 | Individual strengths/weaknesses analysis | S2.1, S1.3 | Medium |
+| S2.4 ✅ | Individual strengths/weaknesses analysis | S2.1, S1.3 | Medium |
 
 **S2.1** ✅ — Global performance (avg error, PR rating), phase profile
 (contact/race/bearoff/opening/midgame/endgame), cube profile (missed doubles,
@@ -214,8 +214,14 @@ Outputs: `player_ranking.parquet`, `player_ranking.csv`,
 `dimension_rankings.csv`, `pr_vs_wins.csv`, `over_under_performers.csv`,
 `temporal_pr.csv`, `ranking_report.txt`.
 
-**S2.4** — Error per position cluster vs population average, z-score per
-cluster → strengths/weaknesses. Same for away score zones. Auto-report template.
+**S2.4** ✅ — Per-player z-score analysis vs population: (a) by position
+cluster (S1.3 labels, joined via position_id), (b) by away-score zone
+(DMP / GS / 4-5away / 6-9away / 10+away). z > +1 → weakness, z < -1 →
+strength. Auto-generates one .txt report per player with phase profile,
+cluster heatmap, and score-zone breakdown.
+Implementation: `scripts/analyze_strengths_weaknesses.py`.
+Outputs: `player_cluster_errors.parquet`, `player_zone_errors.parquet`,
+`strengths_weaknesses.csv`, `reports/<player>.txt`.
 
 ---
 
