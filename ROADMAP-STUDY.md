@@ -7,7 +7,7 @@
 | S0 Data Infrastructure  | ✅ Complete | S0.1-S0.7 | All 7 fiches done — JSONL→Parquet→DuckDB→Features→Validation→Hashing→Graph |
 | S1 Exploration           | ✅ Complete | S1.1-S1.8 | All 8 fiches done — Stats→Correlation→Clustering→Anomaly→Volatility→Dice→Temporal→GraphTopology |
 | S2 Player Profiling      | ✅ Complete | S2.1-S2.4 | All 4 fiches done — Metrics→Clustering→Ranking→Strengths/Weaknesses |
-| S3 Practical Rules       | 🔄 In progress | S3.1-S3.6 | S3.1 ✅ cube heatmap, S3.2 ✅ MET, S3.3 ✅ thresholds, S3.4-S3.6 planned |
+| S3 Practical Rules       | 🔄 In progress | S3.1-S3.6 | S3.1-S3.4 ✅, S3.5-S3.6 planned |
 | S4 Web Dashboard         | ⬜ Planned | S4.1-S4.7 | Views, architecture, board component, API, frontend, trajectories |
 
 ## Overview
@@ -234,7 +234,7 @@ Outputs: `player_cluster_errors.parquet`, `player_zone_errors.parquet`,
 | S3.1 ✅ | Cube error x away score heatmap | S0.4 | Low |
 | S3.2 ✅ | Empirical MET verification | S0.4 | Medium |
 | S3.3 ✅ | Cube equity thresholds by score | S0.4 | Med-High |
-| S3.4 | Heuristics by position type | S1.3, S1.4 | High |
+| S3.4 ✅ | Heuristics by position type | S1.3, S1.4 | High |
 | S3.5 | Gammon impact analysis | S0.4 | Medium |
 | S3.6 | Lightweight predictive model | S0.4, S1.2 | High |
 
@@ -266,8 +266,15 @@ Implementation: `scripts/compute_cube_thresholds.py`.
 Outputs: `cube_thresholds.csv`, `cube_thresholds_gammon.csv`,
 `cube_thresholds_report.txt`.
 
-**S3.4** — Shallow decision tree (depth 3-4) per cluster → interpretable
-rules ("if home board > 4 AND blots > 2 → blitz"), validate on holdout.
+**S3.4** ✅ — DecisionTreeClassifier (depth ≤ 4, class_weight=balanced,
+80/20 holdout) trained per cluster (S1.3 labels, min 200 positions) and
+per phase (contact/race/bearoff). Target: blunder (error > 0.080).
+Rules extracted from danger leaves (precision ≥ 15%, support ≥ 50) and
+translated to natural language ("IF your blots > 2 AND prime length ≤ 1
+→ blunder risk 23%"). Global tree provides feature importance ranking.
+Implementation: `scripts/extract_heuristics.py`.
+Outputs: `heuristics.csv`, `tree_feature_importance.csv`,
+`heuristics_report.txt`.
 
 **S3.5** — Gammon value by score, cube threshold modification, gammon-prone
 positions, dead gammon verification, free drop quantification.
