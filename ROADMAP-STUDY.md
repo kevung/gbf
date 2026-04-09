@@ -225,7 +225,7 @@ Outputs: `player_cluster_errors.parquet`, `player_zone_errors.parquet`,
 
 ---
 
-## S3 — Practical Rules for Play
+## S3 — Practical Rules for Play ✅
 
 **Task sheet**: [docs/tasks/S3-practical-rules.md](docs/tasks/S3-practical-rules.md)
 
@@ -236,7 +236,7 @@ Outputs: `player_cluster_errors.parquet`, `player_zone_errors.parquet`,
 | S3.3 ✅ | Cube equity thresholds by score | S0.4 | Med-High |
 | S3.4 ✅ | Heuristics by position type | S1.3, S1.4 | High |
 | S3.5 ✅ | Gammon impact analysis | S0.4 | Medium |
-| S3.6 | Lightweight predictive model | S0.4, S1.2 | High |
+| S3.6 ✅ | Lightweight predictive model | S0.4, S1.2 | High |
 
 **S3.1** ✅ — Cube decisions filtered from enriched, aggregated per
 (away_p1, away_p2) cell (min 20 decisions). Error-type breakdown
@@ -287,8 +287,16 @@ Implementation: `scripts/analyze_gammon_impact.py`.
 Outputs: `gammon_value_by_score.csv`, `gammon_features.csv`,
 `dead_gammon_analysis.csv`, `free_drop_analysis.csv`, `gammon_report.txt`.
 
-**S3.6** — Cube decision model (XGBoost/LightGBM), SHAP interpretability,
-compare vs S3.3 heuristics. Mental tool, not XG replacement.
+**S3.6** ✅ — LightGBM/sklearn-GBM/RandomForest cube action model (4-class:
+no_double/double/take/pass + two binary models: should_double, should_take).
+80/20 stratified split, `LabelEncoder`, feature importance + SHAP (TreeExplainer,
+2000 samples). Threshold-rule comparison: loads S3.3 `cube_thresholds.csv`,
+applies equity cutoffs, measures accuracy gap vs model. Error magnitude analysis
+(misclassified vs correct avg_error). Pocket scorecard: top-5 SHAP features +
+fixed mental model rules. `get_gbm()` tries LightGBM → sklearn GBM → RandomForest.
+Implementation: `scripts/train_cube_model.py`.
+Outputs: `cube_model_metrics.csv`, `cube_model_feature_importance.csv`,
+`cube_model_shap_summary.csv`, `cube_model_confusion.csv`, `cube_model_report.txt`.
 
 ---
 
