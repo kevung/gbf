@@ -7,7 +7,7 @@
 | S0 Data Infrastructure  | ✅ Complete | S0.1-S0.7 | All 7 fiches done — JSONL→Parquet→DuckDB→Features→Validation→Hashing→Graph |
 | S1 Exploration           | ✅ Complete | S1.1-S1.8 | All 8 fiches done — Stats→Correlation→Clustering→Anomaly→Volatility→Dice→Temporal→GraphTopology |
 | S2 Player Profiling      | ✅ Complete | S2.1-S2.4 | All 4 fiches done — Metrics→Clustering→Ranking→Strengths/Weaknesses |
-| S3 Practical Rules       | ⬜ Planned | S3.1-S3.6 | Cube heatmaps, MET, thresholds, heuristics, gammon, model |
+| S3 Practical Rules       | 🔄 In progress | S3.1-S3.6 | S3.1 ✅ cube heatmap, S3.2-S3.6 planned |
 | S4 Web Dashboard         | ⬜ Planned | S4.1-S4.7 | Views, architecture, board component, API, frontend, trajectories |
 
 ## Overview
@@ -231,15 +231,21 @@ Outputs: `player_cluster_errors.parquet`, `player_zone_errors.parquet`,
 
 | Fiche | Objective | Needs | Complexity |
 |-------|-----------|-------|------------|
-| S3.1 | Cube error x away score heatmap | S0.4 | Low |
+| S3.1 ✅ | Cube error x away score heatmap | S0.4 | Low |
 | S3.2 | Empirical MET verification | S0.4 | Medium |
 | S3.3 | Cube equity thresholds by score | S0.4 | Med-High |
 | S3.4 | Heuristics by position type | S1.3, S1.4 | High |
 | S3.5 | Gammon impact analysis | S0.4 | Medium |
 | S3.6 | Lightweight predictive model | S0.4, S1.2 | High |
 
-**S3.1** — Filter cube decisions, aggregate error by (away_p1, away_p2),
-separate by error type, per match length heatmaps, identify hot spots.
+**S3.1** ✅ — Cube decisions filtered from enriched, aggregated per
+(away_p1, away_p2) cell (min 20 decisions). Error-type breakdown
+(missed_double / wrong_take / wrong_pass rates). Per-match-length grids
+(5/7/9/11/13-pt). Hot-spot detection (error > mean + 1σ). ASCII grid
+report. Score asymmetry check (|error(p1,p2) − error(p2,p1)|).
+Implementation: `scripts/analyze_cube_heatmap.py`.
+Outputs: `cube_heatmap_global.csv`, `cube_heatmap_by_length.csv`,
+`cube_hotspots.csv`, `cube_error_types.csv`, `cube_heatmap_report.txt`.
 
 **S3.2** — Average equity of neutral positions as proxy for match equity,
 compare with Kazaross/Woolsey MET, analyze deviations, player level effect.
