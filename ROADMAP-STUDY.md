@@ -7,7 +7,7 @@
 | S0 Data Infrastructure  | ✅ Complete | S0.1-S0.7 | All 7 fiches done — JSONL→Parquet→DuckDB→Features→Validation→Hashing→Graph |
 | S1 Exploration           | ✅ Complete | S1.1-S1.8 | All 8 fiches done — Stats→Correlation→Clustering→Anomaly→Volatility→Dice→Temporal→GraphTopology |
 | S2 Player Profiling      | ✅ Complete | S2.1-S2.4 | All 4 fiches done — Metrics→Clustering→Ranking→Strengths/Weaknesses |
-| S3 Practical Rules       | 🔄 In progress | S3.1-S3.6 | S3.1 ✅ cube heatmap, S3.2 ✅ MET verification, S3.3-S3.6 planned |
+| S3 Practical Rules       | 🔄 In progress | S3.1-S3.6 | S3.1 ✅ cube heatmap, S3.2 ✅ MET, S3.3 ✅ thresholds, S3.4-S3.6 planned |
 | S4 Web Dashboard         | ⬜ Planned | S4.1-S4.7 | Views, architecture, board component, API, frontend, trajectories |
 
 ## Overview
@@ -233,7 +233,7 @@ Outputs: `player_cluster_errors.parquet`, `player_zone_errors.parquet`,
 |-------|-----------|-------|------------|
 | S3.1 ✅ | Cube error x away score heatmap | S0.4 | Low |
 | S3.2 ✅ | Empirical MET verification | S0.4 | Medium |
-| S3.3 | Cube equity thresholds by score | S0.4 | Med-High |
+| S3.3 ✅ | Cube equity thresholds by score | S0.4 | Med-High |
 | S3.4 | Heuristics by position type | S1.3, S1.4 | High |
 | S3.5 | Gammon impact analysis | S0.4 | Medium |
 | S3.6 | Lightweight predictive model | S0.4, S1.2 | High |
@@ -257,8 +257,14 @@ Implementation: `scripts/verify_met.py`.
 Outputs: `met_comparison.csv`, `met_deviations.csv`, `met_report.txt`,
 `kazaross_met.csv`, `kazaross_tp*.csv`, `kazaross_gv*.csv`.
 
-**S3.3** — Equity thresholds for double/take/pass per score pair, compare
-with Janowski, gammon rate interaction. Printable reference tables.
+**S3.3** ✅ — Double threshold estimated as midpoint(p90(equity|no_double),
+p10(equity|double)); pass threshold as midpoint(p90(equity|take),
+p10(equity|pass)). Compared with Kazaross-XG2 TP2-live table and Janowski
+double threshold (MET-derived). Gammon interaction: pass threshold recomputed
+by gammon_threat quartile (low/medium/high). Printable ASCII reference tables.
+Implementation: `scripts/compute_cube_thresholds.py`.
+Outputs: `cube_thresholds.csv`, `cube_thresholds_gammon.csv`,
+`cube_thresholds_report.txt`.
 
 **S3.4** — Shallow decision tree (depth 3-4) per cluster → interpretable
 rules ("if home board > 4 AND blots > 2 → blitz"), validate on holdout.
