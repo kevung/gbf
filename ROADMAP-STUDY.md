@@ -7,7 +7,7 @@
 | S0 Data Infrastructure  | ✅ Complete | S0.1-S0.7 | All 7 fiches done — JSONL→Parquet→DuckDB→Features→Validation→Hashing→Graph |
 | S1 Exploration           | ✅ Complete | S1.1-S1.8 | All 8 fiches done — Stats→Correlation→Clustering→Anomaly→Volatility→Dice→Temporal→GraphTopology |
 | S2 Player Profiling      | ✅ Complete | S2.1-S2.4 | All 4 fiches done — Metrics→Clustering→Ranking→Strengths/Weaknesses |
-| S3 Practical Rules       | 🔄 In progress | S3.1-S3.6 | S3.1 ✅ cube heatmap, S3.2-S3.6 planned |
+| S3 Practical Rules       | 🔄 In progress | S3.1-S3.6 | S3.1 ✅ cube heatmap, S3.2 ✅ MET verification, S3.3-S3.6 planned |
 | S4 Web Dashboard         | ⬜ Planned | S4.1-S4.7 | Views, architecture, board component, API, frontend, trajectories |
 
 ## Overview
@@ -232,7 +232,7 @@ Outputs: `player_cluster_errors.parquet`, `player_zone_errors.parquet`,
 | Fiche | Objective | Needs | Complexity |
 |-------|-----------|-------|------------|
 | S3.1 ✅ | Cube error x away score heatmap | S0.4 | Low |
-| S3.2 | Empirical MET verification | S0.4 | Medium |
+| S3.2 ✅ | Empirical MET verification | S0.4 | Medium |
 | S3.3 | Cube equity thresholds by score | S0.4 | Med-High |
 | S3.4 | Heuristics by position type | S1.3, S1.4 | High |
 | S3.5 | Gammon impact analysis | S0.4 | Medium |
@@ -247,8 +247,15 @@ Implementation: `scripts/analyze_cube_heatmap.py`.
 Outputs: `cube_heatmap_global.csv`, `cube_heatmap_by_length.csv`,
 `cube_hotspots.csv`, `cube_error_types.csv`, `cube_heatmap_report.txt`.
 
-**S3.2** — Average equity of neutral positions as proxy for match equity,
-compare with Kazaross/Woolsey MET, analyze deviations, player level effect.
+**S3.2** ✅ — Early-game checker positions (move ≤ 3) used as MET proxy.
+Empirical win% = 50×(1+avg_equity) compared to Kazaross-XG2 MET (15×15).
+Deviation analysis by score zone (DMP/GS/4-6away/7-10away/money).
+On-roll bias quantification (tied-score cells → expected 50%). Full
+Kazaross reference tables (MET, take points 2/4-cube live/last, gammon
+values 1/2/4-cube) embedded and exported to CSV for S3.3/S3.5.
+Implementation: `scripts/verify_met.py`.
+Outputs: `met_comparison.csv`, `met_deviations.csv`, `met_report.txt`,
+`kazaross_met.csv`, `kazaross_tp*.csv`, `kazaross_gv*.csv`.
 
 **S3.3** — Equity thresholds for double/take/pass per score pair, compare
 with Janowski, gammon rate interaction. Printable reference tables.
