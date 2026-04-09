@@ -7,7 +7,7 @@
 | S0 Data Infrastructure  | ✅ Complete | S0.1-S0.7 | All 7 fiches done — JSONL→Parquet→DuckDB→Features→Validation→Hashing→Graph |
 | S1 Exploration           | ✅ Complete | S1.1-S1.8 | All 8 fiches done — Stats→Correlation→Clustering→Anomaly→Volatility→Dice→Temporal→GraphTopology |
 | S2 Player Profiling      | ✅ Complete | S2.1-S2.4 | All 4 fiches done — Metrics→Clustering→Ranking→Strengths/Weaknesses |
-| S3 Practical Rules       | 🔄 In progress | S3.1-S3.6 | S3.1-S3.4 ✅, S3.5-S3.6 planned |
+| S3 Practical Rules       | 🔄 In progress | S3.1-S3.6 | S3.1-S3.5 ✅, S3.6 planned |
 | S4 Web Dashboard         | ⬜ Planned | S4.1-S4.7 | Views, architecture, board component, API, frontend, trajectories |
 
 ## Overview
@@ -235,7 +235,7 @@ Outputs: `player_cluster_errors.parquet`, `player_zone_errors.parquet`,
 | S3.2 ✅ | Empirical MET verification | S0.4 | Medium |
 | S3.3 ✅ | Cube equity thresholds by score | S0.4 | Med-High |
 | S3.4 ✅ | Heuristics by position type | S1.3, S1.4 | High |
-| S3.5 | Gammon impact analysis | S0.4 | Medium |
+| S3.5 ✅ | Gammon impact analysis | S0.4 | Medium |
 | S3.6 | Lightweight predictive model | S0.4, S1.2 | High |
 
 **S3.1** ✅ — Cube decisions filtered from enriched, aggregated per
@@ -276,8 +276,16 @@ Implementation: `scripts/extract_heuristics.py`.
 Outputs: `heuristics.csv`, `tree_feature_importance.csv`,
 `heuristics_report.txt`.
 
-**S3.5** — Gammon value by score, cube threshold modification, gammon-prone
-positions, dead gammon verification, free drop quantification.
+**S3.5** ✅ — Four analyses: (1) avg gammon_threat/risk per (away_p1, away_p2)
+cell vs Kazaross-XG2 GV1/GV2/GV4 reference tables; (2) board features
+predicting high gammon threat (DT importance: home_board_strength, prime
+length, opponent blots); (3) DGR — empirically verify that DGR positions
+have higher-than-average gammon_threat that is strategically wasted;
+(4) free-drop — post-Crawford cube error rate + wrong_take (= missed
+free pass) rate by score. Kazaross GV tables embedded from legacy/*.js.
+Implementation: `scripts/analyze_gammon_impact.py`.
+Outputs: `gammon_value_by_score.csv`, `gammon_features.csv`,
+`dead_gammon_analysis.csv`, `free_drop_analysis.csv`, `gammon_report.txt`.
 
 **S3.6** — Cube decision model (XGBoost/LightGBM), SHAP interpretability,
 compare vs S3.3 heuristics. Mental tool, not XG replacement.
