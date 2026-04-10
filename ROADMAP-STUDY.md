@@ -310,7 +310,7 @@ Outputs: `cube_model_metrics.csv`, `cube_model_feature_importance.csv`,
 | S4.2 ✅ | Web application architecture | S4.1 | Medium |
 | S4.3 ✅ | Board visualization component | — | Medium |
 | S4.4 ✅ | Data API endpoints | S0.3, S4.2 | Medium |
-| S4.5 | Frontend implementation | S4.1, S4.3, S4.4 | High |
+| S4.5 ✅ | Frontend implementation | S4.1, S4.3, S4.4 | High |
 | S4.6 | Testing & deployment | S4.5 | Medium |
 | S4.7 | Position map & trajectory explorer | S0.6-7, S1.3, S1.8, S4.3 | Very High |
 
@@ -350,8 +350,20 @@ players). All user input via bind params; DuckDB thread-local connections;
 `lru_cache` on CSV/JSON static data; CORS for SvelteKit dev server.
 Implementation: `backend/` (`main.py`, `db.py`, `config.py`, `routers/`).
 
-**S4.5** — 8 pages: home, explorer, heatmap, player profile, position
-catalogue, cube helper, rankings, trajectory map.
+**S4.5** ✅ — SvelteKit SPA: `package.json`, `svelte.config.js` (static
+adapter, SPA fallback), `vite.config.ts` (proxy /api → :8000). Shared:
+`src/lib/api.ts` (typed fetch wrappers for all endpoints), `src/lib/stores.ts`
+(Svelte 5 `$state` app-wide store). Components: `CubeHeatmap.svelte` (D3
+15×15 grid + hover/click), `RadarChart.svelte` (SVG radar, compare overlay),
+`TrajectoryMap.svelte` (canvas 2D scaffold, deck.gl wired in S4.7).
+Layout: nav shell with 7 links. Pages: Home (stat cards + view grid),
+Explorer (filter sidebar + paginated table + Board detail panel),
+Heatmap (CubeHeatmap + cell detail), Player profile (radar + metrics table
++ compare mode), Position Catalogue (cluster list + heuristics + positions),
+Cube Helper (threshold 9×9 grid + equity calculator + recommendation badge),
+Rankings (8-metric tabs + over/under-performers), Map (TrajectoryMap +
+crossroad detail panel stub → S4.7).
+Implementation: `frontend/src/`.  
 
 **S4.6** — Performance testing on 160M positions, optimization, functional
 tests, Dockerization, deployment, minimal docs.
