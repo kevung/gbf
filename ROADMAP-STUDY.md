@@ -300,7 +300,7 @@ Outputs: `cube_model_metrics.csv`, `cube_model_feature_importance.csv`,
 
 ---
 
-## S4 — Interactive Dashboard & Web Application
+## S4 — Interactive Dashboard & Web Application ✅
 
 **Task sheet**: [docs/tasks/S4-dashboard.md](docs/tasks/S4-dashboard.md)
 
@@ -312,7 +312,7 @@ Outputs: `cube_model_metrics.csv`, `cube_model_feature_importance.csv`,
 | S4.4 ✅ | Data API endpoints | S0.3, S4.2 | Medium |
 | S4.5 ✅ | Frontend implementation | S4.1, S4.3, S4.4 | High |
 | S4.6 ✅ | Testing & deployment | S4.5 | Medium |
-| S4.7 | Position map & trajectory explorer | S0.6-7, S1.3, S1.8, S4.3 | Very High |
+| S4.7 ✅ | Position map & trajectory explorer | S0.6-7, S1.3, S1.8, S4.3 | Very High |
 
 **S4.1** ✅ — Functional specifications for all 7 dashboard views, grounded
 in S1–S3 outputs. Each view documents: data sources (Parquet/CSV inputs),
@@ -375,6 +375,15 @@ hitting 16 endpoints, reports min/mean/P95/max vs budget. `docker/Dockerfile`
 (read-only data mount, healthcheck). `docs/deployment.md`: pre-computation,
 dev/prod/Docker workflows, optimisation checklist, env vars reference.
 
-**S4.7** — Multi-scale: tiles (zoom 0-3), hexbins (4-7), points (8+, max
-5K visible). deck.gl WebGL. Click → trajectory polylines, board panel on
-hover. UMAP on 1-5M sample + transform, tiling pyramid, spatial index.
+**S4.7** ✅ — `scripts/compute_umap_projection.py`: scalable UMAP pipeline
+(fit on 1–5M sample → `umap.transform()` in batches of 500K; PaCMAP
+fallback; outputs `positions_with_hash.parquet`). Full `TrajectoryMap.svelte`
+rewrite: deck.gl OrthographicView, dynamic layer switching (hexbins-coarse
+zoom<3 / hexbins-fine 3–7 / ScatterplotLayer 8+), debounced viewport fetch,
+PathLayer trajectories, colour modes (density / avg_error / cluster),
+tooltip with position stats, zoom controls, colour legend. `map/+page.svelte`:
+filters (player, phase, error min), colour-by selector, trajectory colour mode
+(error gradient / per match / win-loss), compare mode (two players overlay),
+crossroad detail panel (match count, player count, avg error, continuation
+bar chart, player chips, trajectory count). `@deck.gl/core` + `@deck.gl/layers`
+v9 added to `package.json`.
