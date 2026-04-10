@@ -309,7 +309,7 @@ Outputs: `cube_model_metrics.csv`, `cube_model_feature_importance.csv`,
 | S4.1 ✅ | User view definitions (7 views) | S1-S3 results | Medium |
 | S4.2 ✅ | Web application architecture | S4.1 | Medium |
 | S4.3 ✅ | Board visualization component | — | Medium |
-| S4.4 | Data API endpoints | S0.3, S4.2 | Medium |
+| S4.4 ✅ | Data API endpoints | S0.3, S4.2 | Medium |
 | S4.5 | Frontend implementation | S4.1, S4.3, S4.4 | High |
 | S4.6 | Testing & deployment | S4.5 | Medium |
 | S4.7 | Position map & trajectory explorer | S0.6-7, S1.3, S1.8, S4.3 | Very High |
@@ -339,8 +339,16 @@ pip rendering, move arrows (SVG path + arrowhead marker), point number labels,
 player away-score overlays. Responsive via `width:100%` SVG viewBox.
 Implementation: `frontend/src/components/Board.svelte`.
 
-**S4.4** — REST endpoints: players, tournaments, heatmaps, positions,
-cube thresholds, stats/rankings, clusters, map/density/trajectories.
+**S4.4** ✅ — FastAPI backend: 7 routers + `main.py`. Endpoints: players
+(search, profile, positions, compare), tournaments (search, stats), heatmap
+(global/per-length/per-player, cell detail), positions (multi-filter search,
+detail), cube (thresholds, recommendation with gammon adjustment, gammon
+values, heuristics), stats (overview, error distribution, rankings, temporal,
+over/under-performers), clusters (list, profile, positions, heuristics),
+map (viewport points, hexbins), trajectories (by hash, detail, compare two
+players). All user input via bind params; DuckDB thread-local connections;
+`lru_cache` on CSV/JSON static data; CORS for SvelteKit dev server.
+Implementation: `backend/` (`main.py`, `db.py`, `config.py`, `routers/`).
 
 **S4.5** — 8 pages: home, explorer, heatmap, player profile, position
 catalogue, cube helper, rankings, trajectory map.
