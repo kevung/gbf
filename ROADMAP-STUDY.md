@@ -311,7 +311,7 @@ Outputs: `cube_model_metrics.csv`, `cube_model_feature_importance.csv`,
 | S4.3 ✅ | Board visualization component | — | Medium |
 | S4.4 ✅ | Data API endpoints | S0.3, S4.2 | Medium |
 | S4.5 ✅ | Frontend implementation | S4.1, S4.3, S4.4 | High |
-| S4.6 | Testing & deployment | S4.5 | Medium |
+| S4.6 ✅ | Testing & deployment | S4.5 | Medium |
 | S4.7 | Position map & trajectory explorer | S0.6-7, S1.3, S1.8, S4.3 | Very High |
 
 **S4.1** ✅ — Functional specifications for all 7 dashboard views, grounded
@@ -365,8 +365,15 @@ Rankings (8-metric tabs + over/under-performers), Map (TrajectoryMap +
 crossroad detail panel stub → S4.7).
 Implementation: `frontend/src/`.  
 
-**S4.6** — Performance testing on 160M positions, optimization, functional
-tests, Dockerization, deployment, minimal docs.
+**S4.6** ✅ — `backend/materialise.py`: offline batch script building 7
+aggregation Parquet tables + PNG tile pyramid (zoom 0–7) from raw S0–S3
+outputs; manifest.json with checksums. `backend/tests/test_routers.py`:
+36 pytest tests covering all routers with in-memory DuckDB fixture (no
+Parquet data required). `scripts/perf_test.py`: performance benchmark
+hitting 16 endpoints, reports min/mean/P95/max vs budget. `docker/Dockerfile`
+(multi-stage: Node build + Python runtime) + `docker/docker-compose.yml`
+(read-only data mount, healthcheck). `docs/deployment.md`: pre-computation,
+dev/prod/Docker workflows, optimisation checklist, env vars reference.
 
 **S4.7** — Multi-scale: tiles (zoom 0-3), hexbins (4-7), points (8+, max
 5K visible). deck.gl WebGL. Click → trajectory polylines, board panel on
