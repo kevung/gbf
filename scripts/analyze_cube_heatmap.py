@@ -167,12 +167,18 @@ def agg_heatmap(df: pl.DataFrame, min_n: int = MIN_N_CELL) -> pl.DataFrame:
     if "eval_equity" in df.columns:
         agg_exprs.append(pl.col("eval_equity").mean().alias("avg_equity"))
 
-    for flag in ["is_missed_double", "is_wrong_take", "is_wrong_pass"]:
-        if flag in df.columns:
-            col = flag.replace("is_", "") + "_rate"
-            agg_exprs.append(
-                pl.col(flag).cast(pl.Float32).mean().alias(col)
-            )
+    error_flags = [f for f in ["is_missed_double", "is_wrong_take", "is_wrong_pass"]
+                   if f in df.columns]
+    for flag in error_flags:
+        col = flag.replace("is_", "") + "_rate"
+        agg_exprs.append(pl.col(flag).cast(pl.Float32).mean().alias(col))
+
+    # Cube error rate = any wrong action (fallback when move_played_error is null)
+    if error_flags:
+        agg_exprs.append(
+            pl.any_horizontal([pl.col(f) for f in error_flags])
+            .cast(pl.Float32).mean().alias("cube_error_rate")
+        )
 
     result = (
         df.group_by(["score_away_p1", "score_away_p2"])
@@ -390,14 +396,22 @@ def main() -> None:
     # ------------------------------------------------------------------
     section("1. Global error heatmap")
     heatmap = agg_heatmap(cube)
+    # BMAB cube decisions have no numeric move_played_error — fall back to cube_error_rate
+    if (not heatmap.is_empty()
+            and "avg_error" in heatmap.columns
+            and heatmap["avg_error"].null_count() == len(heatmap)
+            and "cube_error_rate" in heatmap.columns):
+        heatmap = heatmap.with_columns(pl.col("cube_error_rate").alias("avg_error"))
     heatmap = add_hotspot_flag(heatmap)
     print(f"  {len(heatmap):,} cells (away_p1 × away_p2) with >= {MIN_N_CELL} decisions")
 
     if not heatmap.is_empty():
         gmean = heatmap["avg_error"].mean()
         gmax  = heatmap["avg_error"].max()
-        print(f"  Global mean cube error : {gmean:.4f}")
-        print(f"  Max cell avg error     : {gmax:.4f}")
+        if gmean is not None:
+            print(f"  Global mean cube error : {gmean:.4f}")
+        if gmax is not None:
+            print(f"  Max cell avg error     : {gmax:.4f}")
 
     # ------------------------------------------------------------------
     # 2. Hot spots

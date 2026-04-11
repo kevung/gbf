@@ -687,16 +687,21 @@ def main() -> None:
         for row in free_drop_df.iter_rows(named=True):
             bl = (row.get("blunder_rate") or 0) * 100
             wt = (row.get("wrong_take_rate") or 0) * 100
+            ae = row['avg_cube_error']
+            ae_s = f"{ae:>9.4f}" if ae is not None else "      n/a"
             print(f"  {str(row['game_context']):<16}  {row['n']:>8,}  "
-                  f"{row['avg_cube_error']:>9.4f}  {bl:>8.1f}%  {wt:>10.1f}%")
+                  f"{ae_s}  {bl:>8.1f}%  {wt:>10.1f}%")
 
         # Quantify the free drop advantage
         ctx_map = {r["game_context"]: r for r in free_drop_df.iter_rows(named=True)}
         if "post_crawford" in ctx_map and "normal" in ctx_map:
             pc = ctx_map["post_crawford"]
             nm = ctx_map["normal"]
-            delta = pc["avg_cube_error"] - nm["avg_cube_error"]
-            print(f"\n  Cube error delta (post_crawford − normal): {delta:+.4f}")
+            pc_err = pc["avg_cube_error"]
+            nm_err = nm["avg_cube_error"]
+            if pc_err is not None and nm_err is not None:
+                delta = pc_err - nm_err
+                print(f"\n  Cube error delta (post_crawford − normal): {delta:+.4f}")
             if pc.get("wrong_take_rate") is not None:
                 print(f"  Free-drop miss rate in post-Crawford  : "
                       f"{pc['wrong_take_rate']*100:.1f}%")

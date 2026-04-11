@@ -299,7 +299,10 @@ def compare_with_thresholds(cube: pl.DataFrame,
     if "eval_equity" not in cube.columns:
         return {}
 
-    thr = pl.read_csv(thresholds_path)
+    thr = pl.read_csv(thresholds_path).with_columns([
+        pl.col("double_threshold").cast(pl.Float64, strict=False),
+        pl.col("pass_threshold").cast(pl.Float64, strict=False),
+    ])
     need = {"score_away_p1", "score_away_p2", "double_threshold", "pass_threshold"}
     if not need.issubset(set(thr.columns)):
         return {}

@@ -91,7 +91,7 @@ def select_features(profiles: pl.DataFrame) -> tuple[pl.DataFrame, list[str]]:
     for col in available:
         if df[col].null_count() > 0:
             median = df[col].drop_nulls().median()
-            df = df.with_columns(pl.col(col).fill_null(median))
+            df = df.with_columns(pl.col(col).fill_null(median if median is not None else 0.0))
     return df, available
 
 
