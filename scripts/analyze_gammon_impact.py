@@ -542,8 +542,10 @@ def write_report(gv_df: pl.DataFrame,
         for row in free_drop_df.iter_rows(named=True):
             bl = (row.get("blunder_rate") or 0) * 100
             wt = (row.get("wrong_take_rate") or 0) * 100
+            ae = row['avg_cube_error']
+            ae_s = f"{ae:>9.4f}" if ae is not None else "      n/a"
             lines.append(f"  {str(row['game_context']):<16}  {row['n']:>8,}  "
-                          f"{row['avg_cube_error']:>9.4f}  {bl:>8.1f}%  {wt:>10.1f}%")
+                          f"{ae_s}  {bl:>8.1f}%  {wt:>10.1f}%")
         lines.append("")
 
     if not free_drop_score_df.is_empty():

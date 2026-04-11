@@ -78,6 +78,9 @@ def main():
 
     P = Path(args.parquet_dir)
     D = Path(args.output_dir)
+    S1 = D / "results" / "s1"
+    S2 = D / "results" / "s2"
+    S3 = D / "results" / "s3"
     report_path = Path(args.report)
 
     # ── Collect metrics ──────────────────────────────────────────────
@@ -98,7 +101,7 @@ def main():
         pass
 
     n_players = "n/a"
-    profiles_path = D / "player_profiles" / "player_profiles.parquet"
+    profiles_path = S2 / "player_profiles.parquet"
     if profiles_path.exists():
         try:
             import polars as pl
@@ -106,167 +109,132 @@ def main():
         except Exception:
             pass
 
-    # Checker/cube split
+    # Checker/cube split from phase distribution
     n_checker = "n/a"
     n_cube    = "n/a"
-    stats_overview = D / "stats" / "decision_type_distribution.csv"
-    if stats_overview.exists():
-        try:
-            import polars as pl
-            df = pl.read_csv(stats_overview)
-            for row in df.iter_rows(named=True):
-                if str(row.get("decision_type", "")).lower() == "checker":
-                    n_checker = _fmt(int(row.get("count", 0)))
-                elif str(row.get("decision_type", "")).lower() == "cube":
-                    n_cube = _fmt(int(row.get("count", 0)))
-        except Exception:
-            pass
+    try:
+        import polars as pl
+        # Approximate from enriched count vs decision_type
+        err_dist = S1 / "error_distribution_checker.csv"
+        if err_dist.exists():
+            df_err = pl.read_csv(err_dist)
+            n_checker = _fmt(int(df_err["n"].sum())) if "n" in df_err.columns else "n/a"
+    except Exception:
+        pass
 
     # S1.1 stats
     median_checker_error = "n/a"
     median_cube_error    = "n/a"
-    err_dist = D / "stats" / "error_distribution_checker.csv"
-    if err_dist.exists():
-        try:
-            import polars as pl
+    try:
+        import polars as pl
+        err_dist = S1 / "error_distribution_checker.csv"
+        if err_dist.exists():
             df = pl.read_csv(err_dist)
-            if "p50" in df.columns:
-                median_checker_error = f"{df['p50'][0]:.4f}"
-        except Exception:
-            pass
-    err_dist_c = D / "stats" / "error_distribution_cube.csv"
-    if err_dist_c.exists():
-        try:
-            import polars as pl
-            df = pl.read_csv(err_dist_c)
-            if "p50" in df.columns:
-                median_cube_error = f"{df['p50'][0]:.4f}"
-        except Exception:
-            pass
+            # error_bin is the lower bound; find bin where cumulative reaches 50%
+            if "n" in df.columns and "error_bin" in df.columns:
+                total = df["n"].sum()
+                cum = 0
+                for row in df.iter_rows(named=True):
+                    cum += row["n"]
+                    if cum >= total / 2:
+                        median_checker_error = f"{row['error_bin']:.4f}"
+                        break
+    except Exception:
+        pass
 
     # S1.2 top feature
     top_feature = "n/a"
-    corr_path = D / "stats" / "spearman_correlation.csv"
-    if corr_path.exists():
-        try:
-            import polars as pl
+    try:
+        import polars as pl
+        corr_path = S1 / "spearman_checker.csv"
+        if corr_path.exists():
             df = pl.read_csv(corr_path).sort("abs_rho", descending=True)
             top_feature = df["feature"][0] if "feature" in df.columns else "n/a"
-        except Exception:
-            pass
+    except Exception:
+        pass
 
     # S1.3 cluster counts
     n_checker_clusters = "n/a"
     n_cube_clusters    = "n/a"
-    ck = D / "clusters" / "cluster_profiles_checker.csv"
-    if ck.exists():
-        try:
-            import polars as pl
+    try:
+        import polars as pl
+        ck = S1 / "cluster_profiles_checker.csv"
+        if ck.exists():
             n_checker_clusters = str(len(pl.read_csv(ck)))
-        except Exception:
-            pass
-    cu = D / "clusters" / "cluster_profiles_cube.csv"
-    if cu.exists():
-        try:
-            import polars as pl
+        cu = S1 / "cluster_profiles_cube.csv"
+        if cu.exists():
             n_cube_clusters = str(len(pl.read_csv(cu)))
-        except Exception:
-            pass
-
-    # S1.6 hardest dice
-    hardest_dice = "n/a"
-    dice_path = D / "dice" / "error_by_dice_combo.csv"
-    if dice_path.exists():
-        try:
-            import polars as pl
-            df = pl.read_csv(dice_path).sort("avg_error", descending=True)
-            row = df.row(0, named=True)
-            d1, d2 = row.get("die1", "?"), row.get("die2", "?")
-            e = row.get("avg_error", 0)
-            hardest_dice = f"{d1}-{d2} ({e:.4f})"
-        except Exception:
-            pass
+    except Exception:
+        pass
 
     # S2.1 best player
     best_player_pr = "n/a"
-    ranking_path = D / "player_profiles" / "player_ranking.csv"
-    if ranking_path.exists():
-        try:
-            import polars as pl
+    avg_pr = "n/a"
+    try:
+        import polars as pl
+        ranking_path = S2 / "player_ranking.csv"
+        if ranking_path.exists():
             df = pl.read_csv(ranking_path).sort("pr_rating")
             if len(df) > 0:
                 row = df.row(0, named=True)
                 name = row.get("player", "?")
                 pr = row.get("pr_rating", 0)
                 best_player_pr = f"{name} (PR {pr:.2f})"
-        except Exception:
-            pass
-
-    avg_pr = "n/a"
-    if profiles_path.exists():
-        try:
-            import polars as pl
+        if profiles_path.exists():
             df = pl.read_parquet(profiles_path)
             if "pr_rating" in df.columns:
                 avg_pr = f"{df['pr_rating'].mean():.2f}"
-        except Exception:
-            pass
+    except Exception:
+        pass
 
-    # S3.1 worst heatmap cell
+    # S3.1 worst heatmap cell (cube_heatmap_global.csv)
     worst_cell = "n/a"
-    heatmap_path = D / "cube_analysis" / "cube_hotspots.csv"
-    if heatmap_path.exists():
-        try:
-            import polars as pl
-            df = pl.read_csv(heatmap_path).sort("avg_error", descending=True)
+    n_hotspots = "n/a"
+    try:
+        import polars as pl
+        heatmap_path = S3 / "cube_heatmap_global.csv"
+        if heatmap_path.exists():
+            df = pl.read_csv(heatmap_path).sort("avg_error", descending=True, nulls_last=True)
             if len(df) > 0:
                 row = df.row(0, named=True)
-                worst_cell = f"({row.get('away_p1','?')}, {row.get('away_p2','?')}) error={row.get('avg_error',0):.4f}"
-        except Exception:
-            pass
-
-    n_hotspots = "n/a"
-    if heatmap_path.exists():
-        try:
-            import polars as pl
-            n_hotspots = str(len(pl.read_csv(heatmap_path)))
-        except Exception:
-            pass
+                p1 = row.get("score_away_p1", "?")
+                p2 = row.get("score_away_p2", "?")
+                err = row.get("avg_error", 0) or 0
+                worst_cell = f"(p1={p1}-away, p2={p2}-away) error={err:.4f}"
+            if "is_hotspot" in df.columns:
+                n_hotspots = str(df.filter(pl.col("is_hotspot") == True).height)
+    except Exception:
+        pass
 
     # S3.2 MET max deviation
     met_max_dev = "n/a"
-    met_path = D / "cube_analysis" / "met_deviations.csv"
-    if met_path.exists():
-        try:
-            import polars as pl
+    try:
+        import polars as pl
+        met_path = S3 / "met_deviations.csv"
+        if met_path.exists():
             df = pl.read_csv(met_path)
             if "abs_deviation" in df.columns:
                 met_max_dev = f"{df['abs_deviation'].max():.2f} pts"
-        except Exception:
-            pass
+    except Exception:
+        pass
 
     # S3.6 cube model accuracy
     model_acc = "n/a"
-    model_path = D / "cube_analysis" / "cube_model_metrics.csv"
-    if model_path.exists():
-        try:
-            import polars as pl
+    top_feat_imp = "n/a"
+    try:
+        import polars as pl
+        model_path = S3 / "cube_model_metrics.csv"
+        if model_path.exists():
             df = pl.read_csv(model_path)
             if "accuracy" in df.columns:
                 model_acc = f"{df['accuracy'][0]*100:.1f}%"
-        except Exception:
-            pass
-
-    top_shap = "n/a"
-    shap_path = D / "cube_analysis" / "cube_model_shap_summary.csv"
-    if shap_path.exists():
-        try:
-            import polars as pl
-            df = pl.read_csv(shap_path).sort("mean_abs_shap", descending=True)
+        feat_path = S3 / "cube_model_feature_importance.csv"
+        if feat_path.exists():
+            df = pl.read_csv(feat_path).sort("importance", descending=True)
             if len(df) > 0 and "feature" in df.columns:
-                top_shap = df["feature"][0]
-        except Exception:
-            pass
+                top_feat_imp = df["feature"][0]
+    except Exception:
+        pass
 
     # S0.6 unique positions
     n_unique_pos = "n/a"
@@ -293,10 +261,9 @@ def main():
     for label, path in [
         ("data/parquet/", P),
         ("data/parquet/positions_enriched/", P / "positions_enriched"),
-        ("data/clusters/", D / "clusters"),
-        ("data/player_profiles/", D / "player_profiles"),
-        ("data/cube_analysis/", D / "cube_analysis"),
-        ("data/stats/", D / "stats"),
+        ("data/results/s1/", S1),
+        ("data/results/s2/", S2),
+        ("data/results/s3/", S3),
     ]:
         disk[label] = du_sh(path)
 
@@ -357,9 +324,6 @@ def main():
 - Checker clusters found: **{n_checker_clusters}**
 - Cube clusters found: **{n_cube_clusters}**
 
-### S1.6 Dice
-- Hardest dice combo: **{hardest_dice}**
-
 ---
 
 ## 4. S2 — Player Profiling
@@ -382,7 +346,7 @@ def main():
 
 ### S3.6 Cube Model
 - 4-class accuracy: **{model_acc}**
-- Top SHAP feature: **{top_shap}**
+- Top feature by importance: **{top_feat_imp}**
 
 ---
 
