@@ -11,3 +11,8 @@ explorer/node_modules/
 explorer/dist/
 *.import.journal
 export-jsonl
+
+# Pipeline outputs (large generated data, not versioned)
+data/parquet/
+data/results/
+logs/pipeline.log
