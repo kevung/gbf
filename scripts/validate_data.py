@@ -418,6 +418,13 @@ def main():
         print(f"\n  ERROR: required files missing: {missing_files}", file=sys.stderr)
         sys.exit(1)
 
+    # Prefer deduplicated positions if available (16M vs 81M rows — avoids OOM).
+    dedup_dir = parquet_dir / "positions_dedup"
+    if dedup_dir.exists() and list(dedup_dir.glob("part-*.parquet")):
+        pos_glob = str(dedup_dir / "part-*.parquet")
+        print(f"  Using deduplicated positions ({dedup_dir.name}/)")
+
+    conn.execute("SET memory_limit='6GB'")
     conn.execute(f"CREATE VIEW matches AS SELECT * FROM read_parquet('{matches_path}')")
     conn.execute(f"CREATE VIEW games AS SELECT * FROM read_parquet('{games_path}')")
     conn.execute(f"CREATE VIEW positions AS SELECT * FROM read_parquet('{pos_glob}')")
