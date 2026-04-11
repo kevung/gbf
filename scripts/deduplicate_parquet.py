@@ -51,7 +51,11 @@ def deduplicate_games(parquet_dir: Path) -> int:
 
 
 def deduplicate_positions(parquet_dir: Path, chunk_rows: int = 200_000) -> int:
-    """Filter positions to keep only game_ids present in deduplicated games."""
+    """Filter positions to keep only game_ids present in deduplicated games.
+
+    Uses pure Polars per-file processing (no DuckDB) to keep memory bounded.
+    Each part file is ~27K rows / 2 MB — trivially small.
+    """
     pos_files = sorted((parquet_dir / "positions").glob("part-*.parquet"))
     if not pos_files:
         print("  ERROR: no position part files found", file=sys.stderr)
@@ -60,72 +64,60 @@ def deduplicate_positions(parquet_dir: Path, chunk_rows: int = 200_000) -> int:
     out_dir = parquet_dir / "positions_dedup"
     out_dir.mkdir(exist_ok=True)
 
-    # Load valid game_ids from deduplicated games.
+    # Load valid game_ids from deduplicated games (268K ids × ~25 bytes ≈ 7 MB).
     games_df = pl.read_parquet(parquet_dir / "games.parquet")
     valid_game_ids = set(games_df["game_id"].to_list())
+    del games_df  # free memory immediately
     print(f"  valid game_ids: {len(valid_game_ids):,}")
-
-    conn = duckdb.connect()
-    # Register valid game_ids as a DuckDB relation.
-    valid_df = pl.DataFrame({"game_id": list(valid_game_ids)})
-    conn.register("valid_game_ids", valid_df.to_arrow())
 
     writers: dict[int, pq.ParquetWriter] = {}
     arrow_schema = None
-    total_in = 0
     total_out = 0
     t0 = time.time()
 
     for fi, pos_file in enumerate(pos_files):
-        file_rows = pq.read_metadata(str(pos_file)).num_rows
-        offset = 0
-        while offset < file_rows:
-            sql = f"""
-                SELECT p.* FROM read_parquet('{pos_file}') p
-                WHERE p.game_id IN (SELECT game_id FROM valid_game_ids)
-                LIMIT {chunk_rows} OFFSET {offset}
-            """
-            chunk = conn.execute(sql).fetchdf()
-            if chunk.empty:
-                break
+        # Read entire file (27K rows / ~2 MB — safe).
+        df = pl.read_parquet(pos_file)
+        filtered = df.filter(pl.col("game_id").is_in(valid_game_ids))
+        del df  # release immediately
 
-            total_in += min(chunk_rows, file_rows - offset)
-            total_out += len(chunk)
-            offset += chunk_rows
+        if len(filtered) == 0:
+            continue
 
-            if len(chunk) == 0:
-                continue
+        total_out += len(filtered)
+        table = filtered.to_arrow()
+        del filtered
 
-            table = pa.Table.from_pandas(chunk, preserve_index=False)
-            if arrow_schema is None:
-                arrow_schema = table.schema
+        if arrow_schema is None:
+            arrow_schema = table.schema
 
-            # Partition by game_id hash.
-            game_ids = chunk["game_id"].tolist()
-            part_indices = [hash(gid) % 16 for gid in game_ids]
+        # Partition by game_id hash.
+        game_ids = table.column("game_id").to_pylist()
+        part_indices = [hash(gid) % 16 for gid in game_ids]
 
-            i = 0
-            while i < len(part_indices):
-                p_idx = part_indices[i]
-                j = i + 1
-                while j < len(part_indices) and part_indices[j] == p_idx:
-                    j += 1
-                slice_tbl = table.slice(i, j - i)
-                if p_idx not in writers:
-                    part_path = out_dir / f"part-{p_idx:04d}.parquet"
-                    writers[p_idx] = pq.ParquetWriter(
-                        str(part_path), arrow_schema, compression="snappy"
-                    )
-                writers[p_idx].write_table(slice_tbl)
-                i = j
+        i = 0
+        while i < len(part_indices):
+            p_idx = part_indices[i]
+            j = i + 1
+            while j < len(part_indices) and part_indices[j] == p_idx:
+                j += 1
+            slice_tbl = table.slice(i, j - i)
+            if p_idx not in writers:
+                part_path = out_dir / f"part-{p_idx:04d}.parquet"
+                writers[p_idx] = pq.ParquetWriter(
+                    str(part_path), arrow_schema, compression="snappy"
+                )
+            writers[p_idx].write_table(slice_tbl)
+            i = j
+        del table
 
-        elapsed = time.time() - t0
-        rate = total_out / elapsed if elapsed > 0 else 0
-        print(f"  file {fi+1}/{len(pos_files)}: {total_out:,} kept ({rate:,.0f} pos/s)", end="\r")
+        if (fi + 1) % 100 == 0 or (fi + 1) == len(pos_files):
+            elapsed = time.time() - t0
+            rate = total_out / elapsed if elapsed > 0 else 0
+            print(f"  file {fi+1}/{len(pos_files)}: {total_out:,} kept ({rate:,.0f} pos/s)")
 
     for w in writers.values():
         w.close()
-    conn.close()
 
     elapsed = time.time() - t0
     print(f"\n  positions: filtered {total_out:,} unique rows → {out_dir}/")
