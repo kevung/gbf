@@ -426,6 +426,14 @@ def main() -> None:
     pos = load_enriched(args.enriched, args.sample)
     print(f"  Loaded {len(pos):,} enriched positions ({time.time()-t0:.1f}s)")
 
+    # Add match_id if missing (positions_enriched only joins score columns, not match_id).
+    if "match_id" not in pos.columns and "game_id" in pos.columns:
+        games_path = Path(args.parquet) / "games.parquet"
+        if games_path.exists():
+            games = pl.read_parquet(games_path, columns=["game_id", "match_id"])
+            pos = pos.join(games, on="game_id", how="left")
+            print(f"  Joined match_id from games.parquet")
+
     # Resolve player names
     pos = resolve_player_names(pos, matches)
     n_resolved = pos.filter(pl.col("player").is_not_null()).height
