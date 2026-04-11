@@ -26,6 +26,7 @@ import (
 	"fmt"
 	"io/fs"
 	"log"
+	"math"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -457,19 +458,35 @@ func buildPositionRecord(mv *gbf.Move, posID, gameID string, moveNumber int) pos
 			optimalAction := cubeOptimalAction(mv.CubeAnalysis)
 			p.CubeActionOptimal = &optimalAction
 
-			eq := float64(mv.CubeAnalysis.CubefulNoDouble) / 10000
+			nd := float64(mv.CubeAnalysis.CubefulNoDouble) / 10000
+			dt := float64(mv.CubeAnalysis.CubefulDoubleTake) / 10000
+			dp := float64(mv.CubeAnalysis.CubefulDoublePass) / 10000
+
+			p.EvalEquity = &nd
 			win := float64(mv.CubeAnalysis.WinRate) / 10000
 			winG := float64(mv.CubeAnalysis.GammonRate) / 10000
 			winBG := float64(mv.CubeAnalysis.BackgammonRate) / 10000
 			loseG := float64(mv.CubeAnalysis.OppGammonRate) / 10000
 			loseBG := float64(mv.CubeAnalysis.OppBackgammonRate) / 10000
-
-			p.EvalEquity = &eq
 			p.EvalWin = &win
 			p.EvalWinG = &winG
 			p.EvalWinBG = &winBG
 			p.EvalLoseG = &loseG
 			p.EvalLoseBG = &loseBG
+
+			// Cube error: opponent minimises doubler's equity by choosing
+			// min(DoubleTake, DoublePass).  Error = best_equity - played_equity.
+			effectiveDouble := math.Min(dt, dp)
+			bestEquity := math.Max(nd, effectiveDouble)
+			var playedEquity float64
+			switch mv.CubeAction {
+			case "Double":
+				playedEquity = effectiveDouble
+			default: // "No Double"
+				playedEquity = nd
+			}
+			cubeErr := math.Max(0, bestEquity-playedEquity)
+			p.MovePlayedError = &cubeErr
 		}
 	}
 

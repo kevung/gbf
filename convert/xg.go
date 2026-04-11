@@ -348,12 +348,21 @@ func convertXGCubeAnalysis(xgCA *xgparser.CubeAnalysis) *gbf.CubeDecisionAnalysi
 	doubleTake := float64(xgCA.CubefulDoubleTake)
 	doublePass := float64(xgCA.CubefulDoublePass)
 
-	if noDouble >= doubleTake && noDouble >= doublePass {
+	// The opponent minimises the doubler's equity: they take when DoubleTake < DoublePass
+	// (taking is less bad for them), and pass otherwise.  The effective equity when
+	// doubling is therefore min(DoubleTake, DoublePass), not the maximum.
+	effectiveDouble := doubleTake
+	if doublePass < doubleTake {
+		effectiveDouble = doublePass
+	}
+	if noDouble >= effectiveDouble {
 		cda.BestAction = gbf.CubeActionNoDouble
-	} else if doublePass > doubleTake {
-		cda.BestAction = gbf.CubeActionDoublePass
-	} else {
+	} else if doubleTake <= doublePass {
+		// Opponent takes (taking is less costly for them)
 		cda.BestAction = gbf.CubeActionDoubleTake
+	} else {
+		// Opponent passes (taking is even worse for them)
+		cda.BestAction = gbf.CubeActionDoublePass
 	}
 
 	return cda

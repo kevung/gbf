@@ -28,7 +28,15 @@ None (independent from GBF track M0-M10). Shares the `xgparser` library.
 - Board: two separate 26-int unsigned arrays (`board_p1`, `board_p2`), each
   from that player's perspective: index 0=bar, 1-24=points, 25=borne-off
 - Cube decisions: `dice` is null, `decision_type`="cube", move fields replaced
-  by `cube_action_played` and `cube_action_optimal`
+  by `cube_action_played`, `cube_action_optimal`, and `move_played_error`
+- Cube `move_played_error` = max(0, best_equity − played_equity) where
+  best_equity = max(NoDouble, min(DoubleTake, DoublePass)) and played_equity
+  reflects the action taken (the opponent minimises the doubler's equity)
+- `cube_action_optimal` is derived from the three cubeful equities stored in
+  the XG binary: `BestAction = NoDouble` iff `NoDouble ≥ min(DoubleTake, DoublePass)`;
+  otherwise the opponent takes if `DoubleTake ≤ DoublePass`, else passes.
+  (Bug fix v2: earlier versions incorrectly took the max of the three equities,
+  causing ~91% of positions to be classified as Double/Pass.)
 - Parallel parsing with N workers (default: NumCPU), single-threaded writer
 - Append mode: safe to resume; each run appends to existing files
 

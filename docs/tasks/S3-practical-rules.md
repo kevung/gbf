@@ -146,3 +146,28 @@ interpretable features.
 
 **Goal**: not to replace XG (impossible with simple features), but to create
 a mental tool that players can approximate in their head during a game.
+
+---
+
+## Data Limitations — Cube Decisions
+
+**Doubling only; Take/Pass not captured as separate records.**
+The XG binary format records each doubling opportunity as a `CubeEntry`.
+When the player doubles, the opponent's take/pass response is encoded in the
+game state (cube goes up if taken, game ends if passed) but not emitted as a
+separate cube position record by the exporter.
+
+Consequence: `decision_type = "cube"` contains only positions where the player
+considered doubling (played "No Double" or "Double"). `wrong_take_rate` and
+`wrong_pass_rate` cannot be computed from this dataset.
+
+**BestAction derivation (fixed in v2).**
+Prior to the fix in `convert/xg.go`, `cube_action_optimal` was incorrectly
+derived by taking the maximum of the three cubeful equities (NoDouble,
+DoubleTake, DoublePass).  Since DoublePass ≈ +1.0 for most positions, this
+inflated "Double/Pass" to 91% of decisions and suppressed "No Double" to 0.3%.
+
+The corrected logic: the opponent minimises the doubler's equity, so the
+effective equity when doubling is `min(DoubleTake, DoublePass)`.  Double is
+correct iff this exceeds NoDouble; the opponent takes if DoubleTake ≤
+DoublePass, else passes.
