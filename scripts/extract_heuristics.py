@@ -176,8 +176,8 @@ def extract_rules(tree: DecisionTreeClassifier,
     from sklearn.tree import _tree
 
     t          = tree.tree_
-    feat       = tree.feature_
-    threshold  = tree.threshold_
+    feat       = t.feature
+    threshold  = t.threshold
     n_classes  = t.n_classes[0]
 
     rules = []
@@ -206,9 +206,9 @@ def extract_rules(tree: DecisionTreeClassifier,
         thr   = threshold[node]
 
         # Left branch: feature <= threshold
-        recurse(node * 2 + 1, conditions + [f"{fname} ≤ {thr:.2f}"])
+        recurse(t.children_left[node], conditions + [f"{fname} ≤ {thr:.2f}"])
         # Right branch: feature > threshold
-        recurse(node * 2 + 2, conditions + [f"{fname} > {thr:.2f}"])
+        recurse(t.children_right[node], conditions + [f"{fname} > {thr:.2f}"])
 
     recurse(0, [])
     return sorted(rules, key=lambda r: -r["precision"])
