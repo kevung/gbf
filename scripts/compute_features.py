@@ -512,7 +512,7 @@ def main():
 
     # Quick verification.
     out_files = sorted(out_dir.glob("part-*.parquet"))
-    n_out = sum(pq.read_metadata(str(f)).num_rows for f in out_files)
+    n_out = sum(pl.read_parquet(str(f)).height for f in out_files)
     assert n_out == processed, f"Row count mismatch: {n_out} vs {processed}"
     print(f"Verification: {n_out:,} rows across {len(out_files)} files ✓")
 
