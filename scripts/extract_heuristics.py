@@ -113,9 +113,9 @@ def section(title: str) -> None:
 # ---------------------------------------------------------------------------
 
 def load_enriched(enriched_dir: str, sample: int) -> pl.DataFrame:
-    want = FEATURES + [
+    want = list(dict.fromkeys(FEATURES + [
         "position_id", "decision_type", "move_played_error", "match_phase",
-    ]
+    ]))
     paths = sorted(Path(enriched_dir).glob("**/*.parquet"))
     if not paths:
         sys.exit(f"No parquet files in {enriched_dir}")
