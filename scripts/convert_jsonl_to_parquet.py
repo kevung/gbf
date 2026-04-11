@@ -191,6 +191,32 @@ def convert_positions(
     schema_ready = False
     arrow_schema = None
 
+    # Canonical column order — ensures all chunks share the same schema
+    # regardless of which optional fields appear in each row.
+    CANONICAL_COLS = [
+        "position_id", "game_id", "move_number", "player_on_roll", "decision_type",
+        "dice", "board_p1", "board_p2", "cube_value", "cube_owner",
+        "eval_equity", "eval_win", "eval_win_g", "eval_win_bg", "eval_lose_g", "eval_lose_bg",
+        "move_played", "move_played_error", "best_move", "best_move_equity",
+        "cube_action_played", "cube_action_optimal",
+    ]
+
+    def align_to_schema(table: pa.Table, schema: pa.Schema) -> pa.Table:
+        """Reorder columns and add nulls for any missing columns."""
+        cols = []
+        for field in schema:
+            if field.name in table.schema.names:
+                col = table.column(field.name)
+                if col.type != field.type:
+                    try:
+                        col = col.cast(field.type)
+                    except Exception:
+                        col = pa.nulls(len(table), type=field.type)
+            else:
+                col = pa.nulls(len(table), type=field.type)
+            cols.append(col)
+        return pa.table(cols, schema=schema)
+
     def part_filename(partition: int) -> str:
         if batch_id is not None:
             return f"part-{batch_id:03d}-{partition:04d}.parquet"
@@ -210,15 +236,42 @@ def convert_positions(
         if "candidates" in df.columns:
             df = df.drop("candidates")
 
-        # Convert to Arrow.
+        # Ensure canonical column order (add missing cols as null via pyarrow).
+        # First convert to Arrow with whatever columns exist, then align.
         table = df.to_arrow()
 
         if not schema_ready:
-            arrow_schema = table.schema
+            # Build the reference schema from the canonical column list,
+            # using the types present in this first chunk.
+            fields = []
+            for col in CANONICAL_COLS:
+                if col in table.schema.names:
+                    fields.append(table.schema.field(col))
+                else:
+                    # Use a sensible nullable type for optional columns.
+                    if col in ("move_played", "best_move", "cube_action_played", "cube_action_optimal"):
+                        fields.append(pa.field(col, pa.large_utf8(), nullable=True))
+                    elif col in ("eval_equity", "best_move_equity"):
+                        fields.append(pa.field(col, pa.float64(), nullable=True))
+                    elif col in ("move_played_error", "eval_win", "eval_win_g", "eval_win_bg",
+                                 "eval_lose_g", "eval_lose_bg"):
+                        fields.append(pa.field(col, pa.float32(), nullable=True))
+                    elif col == "dice":
+                        fields.append(pa.field(col, pa.large_list(pa.int64()), nullable=True))
+                    else:
+                        fields.append(pa.field(col, pa.int8(), nullable=True))
+            arrow_schema = pa.schema(fields)
             schema_ready = True
 
+        table = align_to_schema(table, arrow_schema)
+
         # Distribute rows to partition writers.
-        match_ids = df["match_id"].to_list() if "match_id" in df.columns else [""] * len(df)
+        match_col = "game_id"  # game_id always present; use for partitioning
+        if "position_id" in df.columns:
+            match_ids = [pid.rsplit("_game_", 1)[0] if "_game_" in pid else pid
+                         for pid in df["position_id"].to_list()]
+        else:
+            match_ids = [""] * len(df)
         part_indices = [partition_index(mid, n_parts) for mid in match_ids]
 
         # Group consecutive rows by partition for efficiency.

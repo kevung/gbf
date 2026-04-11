@@ -12,7 +12,8 @@
 #   --xg-dir DIR      Source .xg directory (default: data/bmab-2025-06-23)
 #   --parquet-dir DIR  Output Parquet directory (default: data/parquet)
 #   --output-dir DIR   Analysis output base directory (default: data)
-#   --batch-size N     Files per batch (default: 5000)
+#   --batch-size N     Files per batch (default: 1000)
+#   --chunk-rows N     Rows per Polars chunk in converter (default: 100000)
 #   --skip-export      Skip S0.1+S0.2 (Parquet already exists)
 #   --start-at STEP    Start at a specific step (e.g., S0.4, S1.3, S3.1)
 #   --dry-run          Print commands without executing
@@ -23,7 +24,8 @@ set -euo pipefail
 XG_DIR="data/bmab-2025-06-23"
 PARQUET_DIR="data/parquet"
 OUTPUT_DIR="data"
-BATCH_SIZE=5000
+BATCH_SIZE=1000
+CHUNK_ROWS=100000
 SKIP_EXPORT=false
 START_AT=""
 DRY_RUN=false
@@ -31,8 +33,9 @@ DRY_RUN=false
 # ── Parse arguments ──────────────────────────────────────────────────
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --xg-dir)       XG_DIR="$2"; shift 2 ;;
+    --xg-dir)        XG_DIR="$2"; shift 2 ;;
     --parquet-dir)   PARQUET_DIR="$2"; shift 2 ;;
+    --chunk-rows)    CHUNK_ROWS="$2"; shift 2 ;;
     --output-dir)    OUTPUT_DIR="$2"; shift 2 ;;
     --batch-size)    BATCH_SIZE="$2"; shift 2 ;;
     --skip-export)   SKIP_EXPORT=true; shift ;;
@@ -66,7 +69,7 @@ should_run() {
     return 0
   fi
   # Simple ordering: compare step strings lexicographically
-  [[ "$step" >= "$START_AT" ]]
+  [[ "$step" > "$START_AT" || "$step" == "$START_AT" ]]
 }
 
 disk_free() {
@@ -94,8 +97,16 @@ if [[ "$SKIP_EXPORT" == "false" ]] && should_run "S0.1"; then
   log "Processing in $NUM_BATCHES batches of $BATCH_SIZE files"
 
   mkdir -p "$PARQUET_DIR"
+  JOURNAL="$PARQUET_DIR/.batch_journal"
+  touch "$JOURNAL"
 
   for (( BATCH=0; BATCH < NUM_BATCHES; BATCH++ )); do
+    # Skip already-completed batches (journal-based resume)
+    if grep -qx "$BATCH" "$JOURNAL" 2>/dev/null; then
+      log "Batch $BATCH already done (journal), skipping"
+      continue
+    fi
+
     SKIP=$(( BATCH * BATCH_SIZE ))
     log "--- Batch $BATCH/$((NUM_BATCHES-1)) (files $SKIP..$(( SKIP + BATCH_SIZE - 1 ))) ---"
     log "Disk free: $(disk_free) GB"
@@ -104,9 +115,9 @@ if [[ "$SKIP_EXPORT" == "false" ]] && should_run "S0.1"; then
     BATCH_DIR=$(mktemp -d)
     JSONL_DIR=$(mktemp -d)
 
-    sed -n "$((SKIP+1)),$((SKIP+BATCH_SIZE))p" "$FILE_LIST" | while read -r f; do
+    while IFS= read -r f; do
       ln -s "$(realpath "$f")" "$BATCH_DIR/$(basename "$f")"
-    done
+    done < <(sed -n "$((SKIP+1)),$((SKIP+BATCH_SIZE))p" "$FILE_LIST")
 
     # S0.1: Export this batch to JSONL
     run ./bin/export-jsonl -outdir "$JSONL_DIR" "$BATCH_DIR"
@@ -116,12 +127,15 @@ if [[ "$SKIP_EXPORT" == "false" ]] && should_run "S0.1"; then
       --jsonl-dir "$JSONL_DIR" \
       --parquet-dir "$PARQUET_DIR" \
       --batch-id "$BATCH" \
+      --chunk-rows "$CHUNK_ROWS" \
       --append \
       --skip-verify
 
     # Clean up JSONL and temp dir immediately
     rm -rf "$JSONL_DIR" "$BATCH_DIR"
 
+    # Record success in journal
+    echo "$BATCH" >> "$JOURNAL"
     log "Batch $BATCH done. Disk free: $(disk_free) GB"
   done
 
