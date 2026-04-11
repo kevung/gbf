@@ -16,6 +16,7 @@
 #   --chunk-rows N     Rows per Polars chunk in converter (default: 100000)
 #   --skip-export      Skip S0.1+S0.2 (Parquet already exists)
 #   --start-at STEP    Start at a specific step (e.g., S0.4, S1.3, S3.1)
+#   --no-dedup-sources Skip source deduplication (process all files incl. duplicates)
 #   --dry-run          Print commands without executing
 
 set -euo pipefail
@@ -27,20 +28,22 @@ OUTPUT_DIR="data"
 BATCH_SIZE=1000
 CHUNK_ROWS=100000
 SKIP_EXPORT=false
+DEDUP_SOURCES=true
 START_AT=""
 DRY_RUN=false
 
 # ── Parse arguments ──────────────────────────────────────────────────
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --xg-dir)        XG_DIR="$2"; shift 2 ;;
-    --parquet-dir)   PARQUET_DIR="$2"; shift 2 ;;
-    --chunk-rows)    CHUNK_ROWS="$2"; shift 2 ;;
-    --output-dir)    OUTPUT_DIR="$2"; shift 2 ;;
-    --batch-size)    BATCH_SIZE="$2"; shift 2 ;;
-    --skip-export)   SKIP_EXPORT=true; shift ;;
-    --start-at)      START_AT="$2"; shift 2 ;;
-    --dry-run)       DRY_RUN=true; shift ;;
+    --xg-dir)           XG_DIR="$2"; shift 2 ;;
+    --parquet-dir)      PARQUET_DIR="$2"; shift 2 ;;
+    --chunk-rows)       CHUNK_ROWS="$2"; shift 2 ;;
+    --output-dir)       OUTPUT_DIR="$2"; shift 2 ;;
+    --batch-size)       BATCH_SIZE="$2"; shift 2 ;;
+    --skip-export)      SKIP_EXPORT=true; shift ;;
+    --no-dedup-sources) DEDUP_SOURCES=false; shift ;;
+    --start-at)         START_AT="$2"; shift 2 ;;
+    --dry-run)          DRY_RUN=true; shift ;;
     *) echo "Unknown option: $1" >&2; exit 1 ;;
   esac
 done
@@ -86,11 +89,28 @@ run go build -o bin/export-jsonl ./cmd/export-jsonl/
 if [[ "$SKIP_EXPORT" == "false" ]] && should_run "S0.1"; then
   log "=== S0.1 + S0.2: Batched export .xg → JSONL → Parquet ==="
 
-  # Collect all .xg files into a list
   FILE_LIST=$(mktemp)
-  find "$XG_DIR" -name '*.xg' -type f | sort > "$FILE_LIST"
+
+  if [[ "$DEDUP_SOURCES" == "true" ]]; then
+    # Build source manifest: hash all .xg files, keep one canonical per duplicate group.
+    # For BMAB this reduces 166K → 33K files (5× speedup, no post-export dedup needed).
+    MANIFEST="${PARQUET_DIR}/.source_manifest.txt"
+    if [[ ! -f "$MANIFEST" ]]; then
+      log "Building source manifest (xxhash64 dedup) ..."
+      run python scripts/build_source_manifest.py \
+        --xg-dir "$XG_DIR" \
+        --output "$MANIFEST" \
+        --workers "$(nproc)"
+    else
+      log "Reusing existing manifest: $MANIFEST"
+    fi
+    cp "$MANIFEST" "$FILE_LIST"
+  else
+    find "$XG_DIR" -name '*.xg' -type f | sort > "$FILE_LIST"
+  fi
+
   TOTAL_FILES=$(wc -l < "$FILE_LIST")
-  log "Found $TOTAL_FILES .xg files"
+  log "Exporting $TOTAL_FILES .xg files"
 
   # Calculate number of batches
   NUM_BATCHES=$(( (TOTAL_FILES + BATCH_SIZE - 1) / BATCH_SIZE ))
@@ -153,11 +173,10 @@ print(f'{total:,} positions across {len(files)} part files')
   log "Positions: $POS_COUNT"
 fi
 
-# ═══════════════════════════════════════════════════════════════════════
-# S0.2b — Deduplication (BMAB has ~5x duplicate matches per .xg file)
-# ═══════════════════════════════════════════════════════════════════════
-if should_run "S0.2b"; then
-  log "=== S0.2b: Deduplication ==="
+# S0.2b — Deduplication is only needed when --no-dedup-sources was used
+# (i.e. all 166K BMAB files were exported instead of the 33K canonical ones).
+if [[ "$DEDUP_SOURCES" == "false" ]] && should_run "S0.2b"; then
+  log "=== S0.2b: Deduplication (--no-dedup-sources mode) ==="
   run python scripts/deduplicate_parquet.py \
     --parquet-dir "$PARQUET_DIR" \
     --chunk-rows 200000
