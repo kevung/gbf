@@ -412,6 +412,9 @@ def main():
     )
     parser.add_argument("--parquet-dir", default="data/parquet",
                         help="Input Parquet directory (S0.2 output)")
+    parser.add_argument("--positions-dir", default=None,
+                        help="Override positions directory (default: <parquet-dir>/positions). "
+                             "Use <parquet-dir>/positions_dedup after S0.2b deduplication.")
     parser.add_argument("--output", default="data/parquet/positions_enriched",
                         help="Output directory for positions_enriched/*.parquet")
     parser.add_argument("--chunk-rows", type=int, default=100_000,
@@ -424,36 +427,46 @@ def main():
     out_dir = Path(args.output)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    pos_glob = str(parquet_dir / "positions" / "part-*.parquet")
+    # Use deduplicated positions if available/requested.
+    if args.positions_dir:
+        positions_dir = Path(args.positions_dir)
+    elif (parquet_dir / "positions_dedup").exists():
+        positions_dir = parquet_dir / "positions_dedup"
+        print("Using deduplicated positions (positions_dedup/)")
+    else:
+        positions_dir = parquet_dir / "positions"
+
+    pos_glob = str(positions_dir / "part-*.parquet")
     games_path = parquet_dir / "games.parquet"
 
     for p in [games_path]:
         if not p.exists():
             print(f"ERROR: {p} not found", file=sys.stderr)
             sys.exit(1)
-    pos_files = sorted((parquet_dir / "positions").glob("part-*.parquet"))
+    pos_files = sorted(positions_dir.glob("part-*.parquet"))
     if not pos_files:
         print("ERROR: no position part files found", file=sys.stderr)
         sys.exit(1)
 
+    # Load games into DuckDB in-memory table (63 MB, safe).
+    # This avoids repeated parquet reads during the per-file join.
     conn = duckdb.connect()
-    conn.execute(f"CREATE VIEW positions AS SELECT * FROM read_parquet('{pos_glob}')")
-    conn.execute(f"CREATE VIEW games AS SELECT * FROM read_parquet('{games_path}')")
+    conn.execute(f"CREATE TABLE games AS SELECT * FROM read_parquet('{games_path}')")
+    conn.execute("CREATE INDEX idx_games_id ON games (game_id)")
 
-    # Count total for progress reporting.
-    total = conn.execute("SELECT COUNT(*) FROM positions").fetchone()[0]
+    total = sum(pq.read_metadata(str(f)).num_rows for f in pos_files)
     print(f"Processing {total:,} positions from {len(pos_files)} part files")
 
-    # Join query: positions + games to get score columns.
+    # Per-file join query — no ORDER BY, no global LIMIT/OFFSET.
+    # Each file is processed independently to keep memory bounded.
     join_sql = """
         SELECT
             p.*,
             g.score_away_p1,
             g.score_away_p2,
             g.crawford
-        FROM positions p
+        FROM read_parquet('{path}') p
         LEFT JOIN games g ON g.game_id = p.game_id
-        ORDER BY p.position_id
         LIMIT {limit} OFFSET {offset}
     """
 
@@ -463,43 +476,46 @@ def main():
 
     t0 = time.time()
     processed = 0
-    offset = 0
 
-    while offset < total:
-        sql = join_sql.format(limit=args.chunk_rows, offset=offset)
-        chunk = conn.execute(sql).pl()
-        if chunk.is_empty():
-            break
+    for file_idx, pos_file in enumerate(pos_files):
+        file_rows = pq.read_metadata(str(pos_file)).num_rows
+        offset = 0
+        while offset < file_rows:
+            sql = join_sql.format(path=pos_file, limit=args.chunk_rows, offset=offset)
+            chunk = conn.execute(sql).pl()
+            if chunk.is_empty():
+                break
 
-        enriched = compute_features(chunk)
+            enriched = compute_features(chunk)
 
-        # Determine partition for each row.
-        match_ids = enriched["game_id"].str.slice(0, 16).to_list()
-        part_indices = [hash(mid) % args.parts for mid in match_ids]
+            # Determine partition for each row.
+            match_ids = enriched["game_id"].str.slice(0, 16).to_list()
+            part_indices = [hash(mid) % args.parts for mid in match_ids]
 
-        table = enriched.to_arrow()
-        if arrow_schema is None:
-            arrow_schema = table.schema
+            table = enriched.to_arrow()
+            if arrow_schema is None:
+                arrow_schema = table.schema
 
-        # Distribute to partitions.
-        i = 0
-        while i < len(part_indices):
-            p = part_indices[i]
-            j = i + 1
-            while j < len(part_indices) and part_indices[j] == p:
-                j += 1
-            slice_tbl = table.slice(i, j - i)
-            if p not in writers:
-                part_path = out_dir / f"part-{p:04d}.parquet"
-                writers[p] = pq.ParquetWriter(str(part_path), arrow_schema, compression="snappy")
-            writers[p].write_table(slice_tbl)
-            i = j
+            # Distribute to partitions.
+            i = 0
+            while i < len(part_indices):
+                p = part_indices[i]
+                j = i + 1
+                while j < len(part_indices) and part_indices[j] == p:
+                    j += 1
+                slice_tbl = table.slice(i, j - i)
+                if p not in writers:
+                    part_path = out_dir / f"part-{p:04d}.parquet"
+                    writers[p] = pq.ParquetWriter(str(part_path), arrow_schema, compression="snappy")
+                writers[p].write_table(slice_tbl)
+                i = j
 
-        processed += len(chunk)
-        offset += args.chunk_rows
+            processed += len(chunk)
+            offset += args.chunk_rows
+
         elapsed = time.time() - t0
-        rate = processed / elapsed
-        print(f"  {processed:,}/{total:,} ({rate:,.0f} rows/s) ...", end="\r")
+        rate = processed / elapsed if elapsed > 0 else 0
+        print(f"  file {file_idx+1}/{len(pos_files)}: {processed:,}/{total:,} ({rate:,.0f} rows/s) ...", end="\r")
 
     for w in writers.values():
         w.close()

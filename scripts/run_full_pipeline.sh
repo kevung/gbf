@@ -154,10 +154,26 @@ print(f'{total:,} positions across {len(files)} part files')
 fi
 
 # ═══════════════════════════════════════════════════════════════════════
-# S0.4 — Feature Engineering
+# S0.2b — Deduplication (BMAB has ~5x duplicate matches per .xg file)
+# ═══════════════════════════════════════════════════════════════════════
+if should_run "S0.2b"; then
+  log "=== S0.2b: Deduplication ==="
+  run python scripts/deduplicate_parquet.py \
+    --parquet-dir "$PARQUET_DIR" \
+    --chunk-rows 200000
+fi
+
+# ═══════════════════════════════════════════════════════════════════════
+# S0.4 — Feature Engineering (on deduplicated positions)
 # ═══════════════════════════════════════════════════════════════════════
 if should_run "S0.4"; then
   log "=== S0.4: Feature Engineering ==="
+  # Use positions_dedup if available (after S0.2b), else fall back to positions
+  if [[ -d "$PARQUET_DIR/positions_dedup" ]]; then
+    POSITIONS_DIR="$PARQUET_DIR/positions_dedup"
+  else
+    POSITIONS_DIR="$PARQUET_DIR/positions"
+  fi
   run python scripts/compute_features.py \
     --parquet-dir "$PARQUET_DIR" \
     --output "$ENRICHED_DIR"
