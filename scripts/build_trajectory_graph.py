@@ -66,63 +66,33 @@ def build_edges(
     out_path: str,
     chunk_rows: int,
 ) -> int:
-    """Build raw edges: consecutive position pairs within each game.
-
-    For each game, positions are sorted by move_number.  An edge
-    (from_hash → to_hash) is emitted for each consecutive pair.
-    """
-    # Self-join on game_id + consecutive move_number using window function.
-    # Process game by game to keep memory bounded.
+    """Build raw edges via single DuckDB COPY TO (avoids O(n²) LIMIT/OFFSET)."""
     total_games = conn.execute("SELECT COUNT(DISTINCT game_id) FROM hashes").fetchone()[0]
     print(f"  building edges for {total_games:,} games ...")
-
-    edge_sql = """
-        SELECT
-            h.position_hash    AS from_hash,
-            LEAD(h.position_hash) OVER (
-                PARTITION BY h.game_id ORDER BY h.move_number
-            )                  AS to_hash,
-            h.game_id,
-            h.match_id,
-            h.move_number,
-            p.move_played,
-            CAST(p.move_played_error AS FLOAT) AS error,
-            p.decision_type
-        FROM hashes h
-        LEFT JOIN positions p ON p.position_id = h.position_id
-        QUALIFY to_hash IS NOT NULL
-        ORDER BY h.game_id, h.move_number
-    """
-
-    n_edges = 0
     t0 = time.time()
 
-    with pq.ParquetWriter(out_path, _EDGE_SCHEMA, compression="snappy") as writer:
-        offset = 0
-        while True:
-            chunk_sql = f"""
-                SELECT * FROM ({edge_sql}) sub
-                LIMIT {chunk_rows} OFFSET {offset}
-            """
-            chunk = conn.execute(chunk_sql).pl()
-            if chunk.is_empty():
-                break
+    conn.execute(f"""
+        COPY (
+            SELECT
+                CAST(h.position_hash AS BIGINT)   AS from_hash,
+                CAST(LEAD(h.position_hash) OVER (
+                    PARTITION BY h.game_id ORDER BY h.move_number
+                ) AS BIGINT)                       AS to_hash,
+                h.game_id,
+                h.match_id,
+                CAST(h.move_number AS SMALLINT)    AS move_number,
+                p.move_played,
+                CAST(p.move_played_error AS FLOAT) AS error,
+                p.decision_type
+            FROM hashes h
+            LEFT JOIN positions p ON p.position_id = h.position_id
+            QUALIFY to_hash IS NOT NULL
+            ORDER BY h.game_id, h.move_number
+        ) TO '{out_path}' (FORMAT PARQUET, COMPRESSION SNAPPY)
+    """)
 
-            # Ensure types match schema.
-            chunk = chunk.with_columns([
-                pl.col("from_hash").cast(pl.Int64),
-                pl.col("to_hash").cast(pl.Int64),
-                pl.col("move_number").cast(pl.Int16),
-                pl.col("error").cast(pl.Float32),
-            ])
-
-            writer.write_table(chunk.to_arrow().cast(_EDGE_SCHEMA))
-            n_edges += len(chunk)
-            offset += chunk_rows
-            elapsed = time.time() - t0
-            print(f"  {n_edges:,} edges ({n_edges/elapsed:,.0f} edges/s) ...", end="\r")
-
-    print(f"  {n_edges:,} raw edges in {time.time()-t0:.1f}s            ")
+    n_edges = conn.execute(f"SELECT COUNT(*) FROM read_parquet('{out_path}')").fetchone()[0]
+    print(f"  {n_edges:,} raw edges in {time.time()-t0:.1f}s")
     return n_edges
 
 
@@ -363,20 +333,26 @@ def main():
     out_dir = Path(args.output)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    pos_glob     = str(parquet_dir / "positions" / "part-*.parquet")
+    # Prefer deduplicated positions if available.
+    pos_dir = parquet_dir / "positions_dedup"
+    if not pos_dir.exists() or not list(pos_dir.glob("part-*.parquet")):
+        pos_dir = parquet_dir / "positions"
+    pos_glob     = str(pos_dir / "part-*.parquet")
     hash_path    = str(parquet_dir / "position_hashes.parquet")
     conv_path    = str(parquet_dir / "convergence_index.parquet")
 
     for label, p in [
         ("position_hashes.parquet", hash_path),
         ("convergence_index.parquet", conv_path),
-        ("positions/", str(parquet_dir / "positions")),
+        (pos_dir.name + "/", str(pos_dir)),
     ]:
         if not Path(p).exists():
             print(f"ERROR: {label} not found at {p}", file=sys.stderr)
             sys.exit(1)
 
+    print(f"Using {pos_dir.name}/ for positions")
     conn = duckdb.connect()
+    conn.execute("SET memory_limit='8GB'")
     conn.execute(f"CREATE VIEW positions AS SELECT * FROM read_parquet('{pos_glob}')")
     conn.execute(f"CREATE VIEW hashes AS SELECT * FROM read_parquet('{hash_path}')")
 

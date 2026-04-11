@@ -92,6 +92,7 @@ def load_enriched(enriched_glob: str, parquet_dir: Path | None, sample: int) -> 
     """Load enriched positions, joining with games for score columns if needed."""
     import duckdb
     conn = duckdb.connect()
+    conn.execute("SET memory_limit='8GB'")
     conn.execute(f"CREATE VIEW enriched AS SELECT * FROM read_parquet('{enriched_glob}')")
 
     if parquet_dir:

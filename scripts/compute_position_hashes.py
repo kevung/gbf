@@ -115,51 +115,44 @@ _HASH_SCHEMA = pa.schema([
 # ---------------------------------------------------------------------------
 
 def compute_hashes(
-    conn: duckdb.DuckDBPyConnection,
+    pos_files: list,
+    games_df: pl.DataFrame,
     hash_writer: pq.ParquetWriter,
-    chunk_rows: int,
 ) -> int:
-    """Stream positions+games, compute hashes, write position_hashes.parquet."""
-
-    total = conn.execute("SELECT COUNT(*) FROM positions").fetchone()[0]
-
-    join_sql = """
-        SELECT
-            p.position_id, p.game_id, p.move_number, p.decision_type,
-            p.board_p1, p.cube_value, p.cube_owner,
-            g.match_id, g.score_away_p1, g.score_away_p2
-        FROM positions p
-        LEFT JOIN games g ON g.game_id = p.game_id
-        ORDER BY p.position_id
-        LIMIT {limit} OFFSET {offset}
-    """
-
+    """Per-file Polars join + hash computation. No ORDER BY, no global scan."""
     processed = 0
     t0 = time.time()
+    n_files = len(pos_files)
 
-    while processed < total:
-        sql = join_sql.format(limit=chunk_rows, offset=processed)
-        chunk = conn.execute(sql).pl()
-        if chunk.is_empty():
-            break
+    for fi, pos_file in enumerate(pos_files):
+        df = pl.read_parquet(pos_file, columns=[
+            "position_id", "game_id", "move_number", "decision_type",
+            "board_p1", "cube_value", "cube_owner",
+        ])
+        joined = df.join(
+            games_df.select(["game_id", "match_id", "score_away_p1", "score_away_p2"]),
+            on="game_id", how="left",
+        )
+        del df
 
-        hashes = [_canonical_hash(r) for r in chunk.iter_rows(named=True)]
+        hashes = [_canonical_hash(r) for r in joined.iter_rows(named=True)]
 
         table = pa.table({
-            "position_id":   chunk["position_id"].to_list(),
+            "position_id":   joined["position_id"].to_list(),
             "position_hash": hashes,
-            "game_id":       chunk["game_id"].to_list(),
-            "match_id":      chunk["match_id"].to_list(),
-            "move_number":   chunk["move_number"].to_list(),
-            "decision_type": chunk["decision_type"].to_list(),
+            "game_id":       joined["game_id"].to_list(),
+            "match_id":      joined["match_id"].to_list(),
+            "move_number":   joined["move_number"].to_list(),
+            "decision_type": joined["decision_type"].cast(pl.Utf8).to_list(),
         }, schema=_HASH_SCHEMA)
+        del joined
 
         hash_writer.write_table(table)
-        processed += len(chunk)
+        processed += len(table)
         elapsed = time.time() - t0
-        print(f"  {processed:,}/{total:,} ({processed/elapsed:,.0f} pos/s) ...", end="\r")
+        print(f"  file {fi+1}/{n_files}: {processed:,} ({processed/elapsed:,.0f} pos/s)", flush=True)
 
-    print(f"  {processed:,}/{total:,} done in {time.time()-t0:.1f}s            ")
+    print(f"  done: {processed:,} in {time.time()-t0:.1f}s")
     return processed
 
 
@@ -263,26 +256,36 @@ def main():
     out_dir = Path(args.output)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    pos_glob = str(parquet_dir / "positions" / "part-*.parquet")
+    # Prefer deduplicated positions if available.
+    pos_dir = parquet_dir / "positions_dedup"
+    if not pos_dir.exists() or not list(pos_dir.glob("part-*.parquet")):
+        pos_dir = parquet_dir / "positions"
+    pos_glob = str(pos_dir / "part-*.parquet")
     games_path = parquet_dir / "games.parquet"
 
-    pos_files = sorted((parquet_dir / "positions").glob("part-*.parquet"))
+    pos_files = sorted(pos_dir.glob("part-*.parquet"))
     if not pos_files or not games_path.exists():
         print("ERROR: positions/ or games.parquet not found", file=sys.stderr)
         sys.exit(1)
+    print(f"Using {pos_dir.name}/ ({len(pos_files)} files)")
 
+    # Load games into Polars once (small: 268K rows, 7 MB).
+    games_df = pl.read_parquet(games_path, columns=["game_id", "match_id", "score_away_p1", "score_away_p2"])
+    print(f"Loaded {len(games_df):,} games")
+
+    # DuckDB still needed for convergence index (Step 2) and report (Step 3).
     conn = duckdb.connect()
-    conn.execute(f"CREATE VIEW positions AS SELECT * FROM read_parquet('{pos_glob}')")
-    conn.execute(f"CREATE VIEW games AS SELECT * FROM read_parquet('{games_path}')")
+    conn.execute("SET memory_limit='8GB'")
 
     hash_path = str(out_dir / "position_hashes.parquet")
     conv_path = out_dir / "convergence_index.parquet"
 
-    # Step 1: compute and write position hashes.
-    print(f"Step 1: computing canonical hashes (chunk={args.chunk_rows:,}) ...")
+    # Step 1: compute and write position hashes per-file (no ORDER BY / global scan).
+    print(f"Step 1: computing canonical hashes ({len(pos_files)} files) ...")
     t0 = time.time()
     with pq.ParquetWriter(hash_path, _HASH_SCHEMA, compression="snappy") as writer:
-        n = compute_hashes(conn, writer, args.chunk_rows)
+        n = compute_hashes(pos_files, games_df, writer)
+    del games_df
     print(f"  → position_hashes.parquet: {n:,} rows in {time.time()-t0:.1f}s")
 
     # Step 2: build convergence index via GROUP BY.

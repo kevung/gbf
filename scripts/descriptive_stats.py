@@ -416,7 +416,11 @@ def main():
     out_dir = Path(args.output)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    pos_glob   = str(parquet_dir / "positions" / "part-*.parquet")
+    # Prefer deduplicated positions if available.
+    pos_dir = parquet_dir / "positions_dedup"
+    if not pos_dir.exists() or not list(pos_dir.glob("part-*.parquet")):
+        pos_dir = parquet_dir / "positions"
+    pos_glob   = str(pos_dir / "part-*.parquet")
     games_path = parquet_dir / "games.parquet"
     match_path = parquet_dir / "matches.parquet"
 
@@ -424,12 +428,14 @@ def main():
         if not p.exists():
             print(f"ERROR: {label} not found", file=sys.stderr)
             sys.exit(1)
-    if not list((parquet_dir / "positions").glob("part-*.parquet")):
+    if not list(pos_dir.glob("part-*.parquet")):
         print("ERROR: no position files found", file=sys.stderr)
         sys.exit(1)
 
+    print(f"Using {pos_dir.name}/ for positions")
     t0 = time.time()
     conn = duckdb.connect()
+    conn.execute("SET memory_limit='8GB'")
     conn.execute(f"CREATE VIEW positions AS SELECT * FROM read_parquet('{pos_glob}')")
     conn.execute(f"CREATE VIEW games    AS SELECT * FROM read_parquet('{games_path}')")
     conn.execute(f"CREATE VIEW matches  AS SELECT * FROM read_parquet('{match_path}')")
