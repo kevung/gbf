@@ -162,7 +162,7 @@ def name_clusters(profiles_with_clusters: pl.DataFrame,
         if row.get("error_std") is not None and row.get("avg_error_checker") is not None:
             std = row["error_std"]
             err = row["avg_error_checker"]
-            if std > 0 and std / max(err, 0.001) > 1.2:
+            if std > 0 and std / max(err, 0.001) > 10.0:
                 names[cid] = "The Erratic"
 
     return names

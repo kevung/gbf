@@ -537,11 +537,8 @@ def main():
                 autocorr_summary.rename({"metric": "prev_error_bin", "value": "mean_next_error"}),
                 error_buckets.select([
                     "prev_error_bin",
-                    pl.col("mean_next_error"),
-                    pl.col("count").cast(pl.Float64).alias("count"),
-                ]).drop("count").with_columns(
-                    pl.col("mean_next_error")
-                ),
+                    pl.col("mean_next_error").cast(pl.Float64),
+                ]),
             ], how="diagonal")
             error_buckets.write_csv(output_dir / "error_autocorrelation.csv")
             # Also save summary correlation
