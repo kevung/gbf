@@ -23,6 +23,12 @@ Usage:
         --parquet-dir data/parquet \\
         [--positions-parts 16] \\
         [--chunk-rows 500000]
+
+Batch/append mode (for incremental export):
+    python scripts/convert_jsonl_to_parquet.py \\
+        --jsonl-dir /tmp/batch_003 \\
+        --parquet-dir data/parquet \\
+        --batch-id 3 --append
 """
 
 import argparse
@@ -133,22 +139,32 @@ def count_lines(path: Path) -> int:
 # Conversion functions
 # ---------------------------------------------------------------------------
 
-def convert_matches(jsonl_path: Path, out_path: Path) -> int:
+def convert_matches(jsonl_path: Path, out_path: Path, append: bool = False) -> int:
     """Convert matches.jsonl → matches.parquet. Returns row count."""
     print(f"  reading {jsonl_path}...")
     df = pl.read_ndjson(jsonl_path)
     df = cast_columns(df, MATCHES_SCHEMA)
-    print(f"  {len(df)} matches → {out_path}")
+    if append and out_path.exists():
+        existing = pl.read_parquet(out_path)
+        df = pl.concat([existing, df])
+        print(f"  appended → {len(df)} total matches → {out_path}")
+    else:
+        print(f"  {len(df)} matches → {out_path}")
     df.write_parquet(out_path, compression="snappy")
     return len(df)
 
 
-def convert_games(jsonl_path: Path, out_path: Path) -> int:
+def convert_games(jsonl_path: Path, out_path: Path, append: bool = False) -> int:
     """Convert games.jsonl → games.parquet. Returns row count."""
     print(f"  reading {jsonl_path}...")
     df = pl.read_ndjson(jsonl_path)
     df = cast_columns(df, GAMES_SCHEMA)
-    print(f"  {len(df)} games → {out_path}")
+    if append and out_path.exists():
+        existing = pl.read_parquet(out_path)
+        df = pl.concat([existing, df])
+        print(f"  appended → {len(df)} total games → {out_path}")
+    else:
+        print(f"  {len(df)} games → {out_path}")
     df.write_parquet(out_path, compression="snappy")
     return len(df)
 
@@ -158,11 +174,15 @@ def convert_positions(
     out_dir: Path,
     n_parts: int,
     chunk_rows: int,
+    batch_id: int | None = None,
 ) -> int:
     """Convert positions.jsonl → partitioned positions/*.parquet.
 
     Reads in chunks to handle files larger than RAM. Each chunk is distributed
     to the appropriate partition bucket based on match_id hash.
+
+    When batch_id is set, part files are named part-{batch:03d}-{partition:04d}.parquet
+    to allow multiple batches to coexist without overwriting.
     """
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -170,6 +190,11 @@ def convert_positions(
     writers: dict[int, pq.ParquetWriter] = {}
     schema_ready = False
     arrow_schema = None
+
+    def part_filename(partition: int) -> str:
+        if batch_id is not None:
+            return f"part-{batch_id:03d}-{partition:04d}.parquet"
+        return f"part-{partition:04d}.parquet"
 
     def flush_df(df: pl.DataFrame):
         nonlocal schema_ready, arrow_schema
@@ -205,7 +230,7 @@ def convert_positions(
                 j += 1
             slice_tbl = table.slice(i, j - i)
             if p not in writers:
-                part_path = out_dir / f"part-{p:04d}.parquet"
+                part_path = out_dir / part_filename(p)
                 writers[p] = pq.ParquetWriter(
                     str(part_path), arrow_schema, compression="snappy"
                 )
@@ -309,6 +334,14 @@ def main():
         "--skip-verify", action="store_true",
         help="Skip verification step"
     )
+    parser.add_argument(
+        "--batch-id", type=int, default=None,
+        help="Batch identifier for incremental export (unique part-file naming)"
+    )
+    parser.add_argument(
+        "--append", action="store_true",
+        help="Append to existing matches/games Parquet files instead of overwriting"
+    )
     args = parser.parse_args()
 
     jsonl_dir = Path(args.jsonl_dir)
@@ -324,23 +357,31 @@ def main():
     t_start = time.time()
 
     print("Converting matches...")
-    n_matches = convert_matches(jsonl_dir / "matches.jsonl", parquet_dir / "matches.parquet")
+    n_matches = convert_matches(
+        jsonl_dir / "matches.jsonl", parquet_dir / "matches.parquet",
+        append=args.append,
+    )
 
     print("Converting games...")
-    n_games = convert_games(jsonl_dir / "games.jsonl", parquet_dir / "games.parquet")
+    n_games = convert_games(
+        jsonl_dir / "games.jsonl", parquet_dir / "games.parquet",
+        append=args.append,
+    )
 
-    print(f"Converting positions (parts={args.positions_parts}, chunk={args.chunk_rows:,})...")
+    print(f"Converting positions (parts={args.positions_parts}, chunk={args.chunk_rows:,}"
+          f"{f', batch={args.batch_id}' if args.batch_id is not None else ''})...")
     n_positions = convert_positions(
         jsonl_dir / "positions.jsonl",
         parquet_dir / "positions",
         n_parts=args.positions_parts,
         chunk_rows=args.chunk_rows,
+        batch_id=args.batch_id,
     )
 
     print(f"\nTotal: {n_matches:,} matches, {n_games:,} games, {n_positions:,} positions")
     print(f"Elapsed: {time.time() - t_start:.1f}s")
 
-    if not args.skip_verify:
+    if not args.skip_verify and not args.append:
         verify(parquet_dir, n_matches, n_games, n_positions)
 
     print("\nDone.")
