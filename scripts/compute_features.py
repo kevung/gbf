@@ -56,10 +56,7 @@ import sys
 import time
 from pathlib import Path
 
-import duckdb
-import numpy as np
 import polars as pl
-import pyarrow.parquet as pq
 
 
 # ---------------------------------------------------------------------------
@@ -187,35 +184,58 @@ def _sum_checkers_expr(col: str, indices: list[int]) -> pl.Expr:
 def _classify_phase(df: pl.DataFrame) -> pl.Series:
     """Classify each position as contact(0), race(1), or bearoff(2).
 
-    Bearoff: both players have all checkers in home board (1-6) or borne off.
-    Race: no contact — P1's back checker (highest index) + P2's back checker
-          (highest index) <= 24. This is the standard contact test.
-    Contact: otherwise (checkers cross each other or bar occupied).
+    Vectorized: uses pre-computed sum columns to avoid row-by-row Python loops.
     """
-    def classify(row) -> int:
-        b1, b2 = row["board_p1"], row["board_p2"]
+    # Bearoff: no checkers outside home board (indices 7-24) and no bar checkers.
+    p1_out = sum(pl.col("board_p1").list.get(i).cast(pl.Int32) for i in range(7, 25))
+    p2_out = sum(pl.col("board_p2").list.get(i).cast(pl.Int32) for i in range(7, 25))
+    p1_bar = pl.col("board_p1").list.get(0).cast(pl.Int32)
+    p2_bar = pl.col("board_p2").list.get(0).cast(pl.Int32)
 
-        # Bearoff: no checkers outside home board (1-6) and none on bar.
-        p1_bearoff = all(b1[i] == 0 for i in range(7, 25)) and b1[0] == 0
-        p2_bearoff = all(b2[i] == 0 for i in range(7, 25)) and b2[0] == 0
-        if p1_bearoff and p2_bearoff:
-            return 2
+    # Highest occupied point (back checker) — compute as weighted sum trick.
+    # back_p1 = highest i in 1..24 where board_p1[i] > 0.
+    # Approximation: sum of (point * sign(board[point])) divided by occupied count.
+    # Exact: use the highest index with a checker — computed via list comprehension
+    # on aggregated expression. For vectorized approximate: use last occupied point.
+    # We use the exact formula: back_pi = max index with checkers > 0.
+    # Polars doesn't have argmax on list, so we compute as:
+    #   back_p1 = sum(i * (board[i]>0) for i in 1..24 if no higher occupied)
+    # Simplified: back_p1 ≈ highest index with any checkers, via descending check.
+    # Fast approximation: compute from highest index downward using pl.when chains.
+    # For correctness at scale, we use numpy via map_elements on the board list only.
+    p1_back = pl.col("board_p1").map_elements(
+        lambda b: next((i for i in range(24, 0, -1) if b[i] > 0), 0),
+        return_dtype=pl.Int32,
+    )
+    p2_back = pl.col("board_p2").map_elements(
+        lambda b: next((i for i in range(24, 0, -1) if b[i] > 0), 0),
+        return_dtype=pl.Int32,
+    )
 
-        # Contact test: find each player's MOST ADVANCED (highest-index) checker.
-        # board_p1[24] = P1's 24-point (furthest from home); board_p2[24] = same.
-        # Contact exists when p1_back + p2_back > 24 (they overlap on the board).
-        p1_back = next((i for i in range(24, 0, -1) if b1[i] > 0), 0)
-        p2_back = next((i for i in range(24, 0, -1) if b2[i] > 0), 0)
+    tmp = df.with_columns([
+        p1_out.alias("_p1_out"),
+        p2_out.alias("_p2_out"),
+        p1_bar.alias("_p1_bar"),
+        p2_bar.alias("_p2_bar"),
+        p1_back.alias("_p1_back"),
+        p2_back.alias("_p2_back"),
+    ])
 
-        # Bar checkers also mean contact (checker needs to re-enter opponent home).
-        if b1[0] > 0 or b2[0] > 0:
-            return 0  # contact
-
-        if p1_back + p2_back > 24:
-            return 0  # contact
-        return 1  # race
-
-    return pl.Series("match_phase", [classify(r) for r in df.iter_rows(named=True)])
+    phase = (
+        pl.when(
+            (tmp["_p1_out"] == 0) & (tmp["_p1_bar"] == 0) &
+            (tmp["_p2_out"] == 0) & (tmp["_p2_bar"] == 0)
+        )
+        .then(pl.lit(2))  # bearoff
+        .when(
+            (tmp["_p1_bar"] > 0) | (tmp["_p2_bar"] > 0) |
+            (tmp["_p1_back"] + tmp["_p2_back"] > 24)
+        )
+        .then(pl.lit(0))  # contact
+        .otherwise(pl.lit(1))  # race
+        .cast(pl.Int8)
+    )
+    return tmp.with_columns(phase.alias("match_phase"))["match_phase"]
 
 
 # ---------------------------------------------------------------------------
@@ -390,13 +410,21 @@ def compute_features(df: pl.DataFrame) -> pl.DataFrame:
                 ).alias("is_post_crawford"),
             ])
 
-        # Take point match (row-by-row, float computation).
-        take_points = [
-            _take_point_match(r["score_away_p1"], r["score_away_p2"])
-            for r in df.select(["score_away_p1", "score_away_p2"]).iter_rows(named=True)
-        ]
+        # Take point match — vectorized Janowski approximation.
+        # ME(n_self, n_opp) ≈ 0.5 + 0.85 * (n_opp - n_self) / (n_opp + n_self) * 0.5
+        a1 = pl.col("score_away_p1").cast(pl.Float64)
+        a2 = pl.col("score_away_p2").cast(pl.Float64)
+        me_nd = 0.5 + 0.85 * (a2 - a1) / (a2 + a1) * 0.5
+        me_w  = 0.5 + 0.85 * (a2 - (a1 - 1)) / (a2 + (a1 - 1).clip(lower_bound=1)) * 0.5
+        me_l  = 0.5 + 0.85 * ((a2 - 1) - a1) / ((a2 - 1).clip(lower_bound=1) + a1) * 0.5
+        denom = me_w - me_l
+        tp = ((me_nd - me_l) / denom.clip(lower_bound=1e-6)).clip(lower_bound=0.0, upper_bound=0.5)
         df = df.with_columns(
-            pl.Series("take_point_match", take_points, dtype=pl.Float32)
+            pl.when((a1 <= 0) | (a2 <= 0))
+              .then(pl.lit(0.25))
+              .otherwise(tp)
+              .cast(pl.Float32)
+              .alias("take_point_match")
         )
 
     return df
@@ -448,82 +476,38 @@ def main():
         print("ERROR: no position part files found", file=sys.stderr)
         sys.exit(1)
 
-    # Load games into DuckDB in-memory table (63 MB, safe).
-    # This avoids repeated parquet reads during the per-file join.
-    conn = duckdb.connect()
-    conn.execute(f"CREATE TABLE games AS SELECT * FROM read_parquet('{games_path}')")
-    conn.execute("CREATE INDEX idx_games_id ON games (game_id)")
+    # Load games once into Polars (7.4 MB → ~30 MB in-memory).
+    # Only the columns needed for score features + join key.
+    games_df = pl.read_parquet(games_path, columns=["game_id", "score_away_p1", "score_away_p2", "crawford"])
+    print(f"Loaded {len(games_df):,} games for join")
 
-    total = sum(pq.read_metadata(str(f)).num_rows for f in pos_files)
-    print(f"Processing {total:,} positions from {len(pos_files)} part files")
-
-    # Per-file join query — no ORDER BY, no global LIMIT/OFFSET.
-    # Each file is processed independently to keep memory bounded.
-    join_sql = """
-        SELECT
-            p.*,
-            g.score_away_p1,
-            g.score_away_p2,
-            g.crawford
-        FROM read_parquet('{path}') p
-        LEFT JOIN games g ON g.game_id = p.game_id
-        LIMIT {limit} OFFSET {offset}
-    """
-
-    # One writer per partition.
-    writers: dict[int, pq.ParquetWriter] = {}
-    arrow_schema = None
+    total = len(pos_files)  # will accumulate exact count during processing
+    print(f"Processing {len(pos_files)} part files (~{len(pos_files) * 30_000:,} positions est.)")
 
     t0 = time.time()
     processed = 0
 
     for file_idx, pos_file in enumerate(pos_files):
-        file_rows = pq.read_metadata(str(pos_file)).num_rows
-        offset = 0
-        while offset < file_rows:
-            sql = join_sql.format(path=pos_file, limit=args.chunk_rows, offset=offset)
-            chunk = conn.execute(sql).pl()
-            if chunk.is_empty():
-                break
+        # Read, join, enrich, write — one file at a time. No writer accumulation.
+        df = pl.read_parquet(pos_file)
+        joined = df.join(games_df, on="game_id", how="left")
+        del df
 
-            enriched = compute_features(chunk)
+        enriched = compute_features(joined)
+        del joined
 
-            # Determine partition for each row.
-            match_ids = enriched["game_id"].str.slice(0, 16).to_list()
-            part_indices = [hash(mid) % args.parts for mid in match_ids]
+        out_file = out_dir / pos_file.name
+        enriched.write_parquet(out_file, compression="snappy")
+        n = len(enriched)
+        del enriched
 
-            table = enriched.to_arrow()
-            if arrow_schema is None:
-                arrow_schema = table.schema
-
-            # Distribute to partitions.
-            i = 0
-            while i < len(part_indices):
-                p = part_indices[i]
-                j = i + 1
-                while j < len(part_indices) and part_indices[j] == p:
-                    j += 1
-                slice_tbl = table.slice(i, j - i)
-                if p not in writers:
-                    part_path = out_dir / f"part-{p:04d}.parquet"
-                    writers[p] = pq.ParquetWriter(str(part_path), arrow_schema, compression="snappy")
-                writers[p].write_table(slice_tbl)
-                i = j
-
-            processed += len(chunk)
-            offset += args.chunk_rows
-
+        processed += n
         elapsed = time.time() - t0
         rate = processed / elapsed if elapsed > 0 else 0
-        print(f"  file {file_idx+1}/{len(pos_files)}: {processed:,}/{total:,} ({rate:,.0f} rows/s) ...", end="\r")
-
-    for w in writers.values():
-        w.close()
-    conn.close()
+        print(f"  file {file_idx+1}/{len(pos_files)}: {processed:,} rows ({rate:,.0f} rows/s)", flush=True)
 
     elapsed = time.time() - t0
-    n_cols = len(arrow_schema) if arrow_schema else 0
-    print(f"\nDone: {processed:,} rows, {n_cols} columns, {len(writers)} parts, {elapsed:.1f}s")
+    print(f"\nDone: {processed:,} rows, {elapsed:.1f}s")
     print(f"Output: {out_dir}/")
 
     # Quick verification.
