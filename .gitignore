@@ -15,4 +15,13 @@ export-jsonl
 # Pipeline outputs (large generated data, not versioned)
 data/parquet/
 data/results/
-logs/pipeline.log
+data/anomalies/
+data/clusters/
+data/cube_analysis/
+data/dice/
+data/graph_topology/
+data/player_profiles/
+data/stats/
+data/temporal/
+data/volatility/
+logs/
