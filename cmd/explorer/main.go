@@ -11,8 +11,10 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"embed"
+	"encoding/csv"
 	"encoding/json"
 	"fmt"
 	"io/fs"
@@ -98,7 +100,12 @@ func main() {
 	mux.HandleFunc("GET /api/config", srv.handleConfig)
 	mux.HandleFunc("POST /api/config/db", srv.handleConfigDB)
 	mux.HandleFunc("POST /api/config/bmab", srv.handleConfigBMAB)
+	mux.HandleFunc("POST /api/config/data", srv.handleConfigData)
 	mux.HandleFunc("GET /api/config/browse", srv.handleBrowseDir)
+
+	// Theme API (requires data directory configured).
+	mux.HandleFunc("GET /api/themes/stats", srv.handleThemeStats)
+	mux.HandleFunc("GET /api/themes/positions", srv.handleThemePositions)
 
 	// Data APIs (require open DB).
 	mux.HandleFunc("GET /api/stats", srv.requireDB(srv.handleStats))
@@ -171,7 +178,12 @@ type server struct {
 	vizSrv  *viz.Server
 	bmabDir string
 	dbPath  string
+	dataDir string // path to data/ directory (contains parquet/ and themes/)
 	logger  *log.Logger
+
+	// Theme position cache: maps theme name → JSON bytes (nil = not cached)
+	themeCacheMu sync.RWMutex
+	themeCache   map[string][]byte
 
 	importMu       sync.Mutex
 	importRunning  bool
@@ -263,8 +275,10 @@ type projectionEvent struct {
 type configResponse struct {
 	DBPath  string `json:"db_path"`
 	BMABDir string `json:"bmab_dir"`
+	DataDir string `json:"data_dir"`
 	HasDB   bool   `json:"has_db"`
 	HasBMAB bool   `json:"has_bmab"`
+	HasData bool   `json:"has_data"`
 }
 
 func (s *server) handleConfig(w http.ResponseWriter, r *http.Request) {
@@ -273,9 +287,52 @@ func (s *server) handleConfig(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, configResponse{
 		DBPath:  s.dbPath,
 		BMABDir: s.bmabDir,
+		DataDir: s.dataDir,
 		HasDB:   s.store != nil,
 		HasBMAB: s.bmabDir != "",
+		HasData: s.dataDir != "",
 	})
+}
+
+func (s *server) handleConfigData(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Path string `json:"path"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Path == "" {
+		writeError(w, http.StatusBadRequest, "path required")
+		return
+	}
+
+	absPath, err := filepath.Abs(req.Path)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid path: %v", err))
+		return
+	}
+
+	info, err := os.Stat(absPath)
+	if err != nil || !info.IsDir() {
+		writeError(w, http.StatusBadRequest, "directory not found: "+absPath)
+		return
+	}
+
+	// Validate: expect themes/ and parquet/position_themes/ subdirs
+	themeCSV := filepath.Join(absPath, "themes", "theme_frequencies.csv")
+	if _, err := os.Stat(themeCSV); err != nil {
+		writeError(w, http.StatusBadRequest, "themes/theme_frequencies.csv not found in "+absPath)
+		return
+	}
+
+	s.mu.Lock()
+	s.dataDir = absPath
+	s.mu.Unlock()
+
+	// Invalidate theme cache when data dir changes.
+	s.themeCacheMu.Lock()
+	s.themeCache = nil
+	s.themeCacheMu.Unlock()
+
+	s.logger.Printf("data dir changed: %s", absPath)
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "path": absPath})
 }
 
 func (s *server) handleConfigDB(w http.ResponseWriter, r *http.Request) {
@@ -1096,6 +1153,151 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 
 func writeError(w http.ResponseWriter, status int, msg string) {
 	writeJSON(w, status, map[string]string{"error": msg})
+}
+
+// ── Theme API ────────────────────────────────────────────────────────────────
+
+type themeFreqRow struct {
+	Theme      string  `json:"theme"`
+	Count      int64   `json:"count"`
+	Proportion float64 `json:"proportion"`
+}
+
+// handleThemeStats reads data/themes/theme_frequencies.csv and returns the rows.
+func (s *server) handleThemeStats(w http.ResponseWriter, r *http.Request) {
+	s.mu.RLock()
+	dataDir := s.dataDir
+	s.mu.RUnlock()
+
+	if dataDir == "" {
+		writeError(w, http.StatusServiceUnavailable, "data directory not configured — use Setup")
+		return
+	}
+
+	csvPath := filepath.Join(dataDir, "themes", "theme_frequencies.csv")
+	f, err := os.Open(csvPath)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "cannot open theme_frequencies.csv: "+err.Error())
+		return
+	}
+	defer f.Close()
+
+	rdr := csv.NewReader(f)
+	records, err := rdr.ReadAll()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "csv parse error: "+err.Error())
+		return
+	}
+
+	var rows []themeFreqRow
+	for i, rec := range records {
+		if i == 0 {
+			continue // header
+		}
+		if len(rec) < 3 {
+			continue
+		}
+		count, _ := strconv.ParseInt(rec[1], 10, 64)
+		prop, _ := strconv.ParseFloat(rec[2], 64)
+		rows = append(rows, themeFreqRow{Theme: rec[0], Count: count, Proportion: prop})
+	}
+	if rows == nil {
+		rows = []themeFreqRow{}
+	}
+	writeJSON(w, http.StatusOK, rows)
+}
+
+// handleThemePositions returns a sample of board positions for the requested theme.
+// It spawns the Python helper script and caches the result per theme.
+func (s *server) handleThemePositions(w http.ResponseWriter, r *http.Request) {
+	s.mu.RLock()
+	dataDir := s.dataDir
+	s.mu.RUnlock()
+
+	if dataDir == "" {
+		writeError(w, http.StatusServiceUnavailable, "data directory not configured — use Setup")
+		return
+	}
+
+	theme := r.URL.Query().Get("theme")
+	if theme == "" {
+		writeError(w, http.StatusBadRequest, "theme query parameter required")
+		return
+	}
+
+	nStr := r.URL.Query().Get("n")
+	n := 24 // default sample size
+	if nStr != "" {
+		if v, err := strconv.Atoi(nStr); err == nil && v > 0 && v <= 200 {
+			n = v
+		}
+	}
+
+	cacheKey := fmt.Sprintf("%s:%d", theme, n)
+
+	// Check cache first.
+	s.themeCacheMu.RLock()
+	cached := s.themeCache[cacheKey]
+	s.themeCacheMu.RUnlock()
+
+	if cached != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write(cached)
+		return
+	}
+
+	// Locate the Python helper script relative to the executable or source tree.
+	scriptPath := ""
+	candidates := []string{
+		"scripts/explorer_theme_query.py",
+		filepath.Join(filepath.Dir(os.Args[0]), "../../scripts/explorer_theme_query.py"),
+		filepath.Join(dataDir, "../scripts/explorer_theme_query.py"),
+	}
+	for _, c := range candidates {
+		if _, err := os.Stat(c); err == nil {
+			scriptPath = c
+			break
+		}
+	}
+	if scriptPath == "" {
+		writeError(w, http.StatusInternalServerError, "explorer_theme_query.py not found")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 120*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "python3", scriptPath, theme, strconv.Itoa(n), dataDir)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	if err := cmd.Run(); err != nil {
+		s.logger.Printf("theme query failed (theme=%s): %v — stderr: %s", theme, err, stderr.String())
+		writeError(w, http.StatusInternalServerError, "theme query failed: "+err.Error())
+		return
+	}
+
+	result := stdout.Bytes()
+
+	// Validate JSON before caching.
+	if !json.Valid(result) {
+		writeError(w, http.StatusInternalServerError, "invalid JSON from theme query: "+string(result))
+		return
+	}
+
+	// Store in cache.
+	s.themeCacheMu.Lock()
+	if s.themeCache == nil {
+		s.themeCache = make(map[string][]byte)
+	}
+	s.themeCache[cacheKey] = result
+	s.themeCacheMu.Unlock()
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	w.Write(result)
 }
 
 func withCORS(h http.Handler) http.Handler {

@@ -1,7 +1,7 @@
 <script>
   import { onMount } from 'svelte';
   import {
-    fetchConfig, setDB, setBMAB, browseDir, formatNumber,
+    fetchConfig, setDB, setBMAB, setDataDir, browseDir, formatNumber,
     startImport, fetchImportStatus, cancelImport, subscribeImportProgress,
     startProjectionCompute, fetchProjectionStatus, subscribeProjectionProgress,
     rebuildProjectionTiles,
@@ -14,6 +14,7 @@
   let saving = $state(false);
   let dbInput = $state('');
   let bmabInput = $state('');
+  let dataInput = $state('');
   let bmabFiles = $state(null);
 
   // ── File browser ──────────────────────────────────────────────────────────
@@ -94,9 +95,20 @@
       config = await fetchConfig();
       dbInput = config.db_path || '';
       bmabInput = config.bmab_dir || '';
+      dataInput = config.data_dir || '';
     } catch (e) {
       error = e.message;
     }
+  }
+
+  async function handleSetDataDir() {
+    if (!dataInput.trim()) return;
+    saving = true; error = null;
+    try {
+      await setDataDir(dataInput.trim());
+      await loadConfig();
+    } catch (e) { error = e.message; }
+    saving = false;
   }
 
   // Reconnect to running/completed import after a tab switch.
@@ -172,8 +184,8 @@
     if (mode === 'db' && dbInput) {
       dbFilename = dbInput.split('/').pop() || 'bmab.db';
     }
-    const startPath = mode === 'db' ? dbInput : bmabInput;
-    await loadBrowserDir(startPath || '', mode);
+    const startPath = mode === 'db' ? dbInput : mode === 'data' ? dataInput : bmabInput;
+    await loadBrowserDir(startPath || '', mode === 'data' ? 'bmab' : mode);
   }
 
   async function loadBrowserDir(path, mode) {
@@ -209,6 +221,8 @@
     if (browsing === 'db') {
       const fn = (dbFilename || 'bmab.db').trim();
       dbInput = fn.startsWith('/') ? fn : browserPath + '/' + fn;
+    } else if (browsing === 'data') {
+      dataInput = browserPath;
     } else {
       bmabInput = browserPath;
     }
@@ -346,9 +360,30 @@
   {/if}
 </div>
 
-<!-- 3 · Import -->
+<!-- 3 · Analysis Data Directory -->
 <div class="card">
-  <h2>3 · Import BMAB Data</h2>
+  <h2>3 · Analysis Data Directory</h2>
+  <p style="color:var(--text-muted);margin-bottom:12px">
+    Path to the <code>data/</code> directory containing the Parquet pipeline outputs
+    (position themes, player profiles, etc.). Required for the Themes tab.
+  </p>
+  <div class="setup-row">
+    <input type="text" bind:value={dataInput} placeholder="/path/to/gbf/data" class="path-input" />
+    <button class="btn" onclick={() => openBrowser('data')}>📁 Browse</button>
+    <button class="btn primary" onclick={handleSetDataDir} disabled={saving || !dataInput.trim()}>
+      Set Directory
+    </button>
+  </div>
+  {#if config?.has_data}
+    <div class="status-badge ok">✅ {config.data_dir}</div>
+  {:else}
+    <div class="status-badge warn">⚠️ No data directory set — Themes tab unavailable</div>
+  {/if}
+</div>
+
+<!-- 4 · Import -->
+<div class="card">
+  <h2>4 · Import BMAB Data</h2>
   <p style="color:var(--text-muted);margin-bottom:12px">
     Load XG files into the database. Requires steps 1 and 2.
     Previously imported files are skipped automatically (resume on restart).

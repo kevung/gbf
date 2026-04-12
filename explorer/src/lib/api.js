@@ -95,6 +95,20 @@ export async function fetchTile(method, lod, z, x, y) {
   return res.json();
 }
 
+// ── Themes ───────────────────────────────────────────────────────────────────
+
+export function setDataDir(path) {
+  return post('/api/config/data', { path });
+}
+
+export function fetchThemeStats() {
+  return get('/api/themes/stats');
+}
+
+export function fetchThemePositions(theme, n = 24) {
+  return get(`/api/themes/positions?theme=${encodeURIComponent(theme)}&n=${n}`);
+}
+
 // ── Import ───────────────────────────────────────────────────────────────────
 
 export function startImport(proportion = 0.01, batchSize = 100) {

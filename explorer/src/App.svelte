@@ -5,6 +5,7 @@
   import Dashboard from './views/Dashboard.svelte';
   import Projection from './views/Projection.svelte';
   import Explorer from './views/Explorer.svelte';
+  import Themes from './views/Themes.svelte';
   import Help from './views/Help.svelte';
 
   const views = [
@@ -12,6 +13,7 @@
     { id: 'dashboard', label: 'Dashboard', icon: '📊' },
     { id: 'projection', label: 'Projections', icon: '🗺️' },
     { id: 'explorer', label: 'Explorer', icon: '📈' },
+    { id: 'themes', label: 'Themes', icon: '🎯' },
     { id: 'help', label: 'Help', icon: '❓' },
   ];
 
@@ -68,6 +70,9 @@
       {#if hasDB || currentView === 'explorer'}
         <Explorer />
       {/if}
+    </div>
+    <div class="view-pane" class:hidden={currentView !== 'themes'}>
+      <Themes active={currentView === 'themes'} />
     </div>
     <div class="view-pane" class:hidden={currentView !== 'help'}>
       <Help />
