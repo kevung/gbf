@@ -25,3 +25,4 @@ data/stats/
 data/temporal/
 data/volatility/
 logs/
+tests/__pycache__/
