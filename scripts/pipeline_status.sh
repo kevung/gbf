@@ -51,7 +51,35 @@ echo "Parquet size:     $(du -sh $PARQUET_DIR 2>/dev/null | cut -f1)"
 ETA_MIN=$(( REMAINING * 37 / 60 ))
 echo "ETA (S0.1+S0.2):  ~${ETA_MIN} min"
 
+# S1.9 — Thematic classification status
+THEMES_DIR="$PARQUET_DIR/position_themes"
+if [[ -d "$THEMES_DIR" ]]; then
+  THEME_PARTS=$(ls "$THEMES_DIR"/part-*.parquet 2>/dev/null | wc -l)
+  echo ""
+  echo "=== S1.9: Position Themes ==="
+  echo "Theme partitions: $THEME_PARTS"
+  if [[ -f "${PARQUET_DIR}/../themes/theme_frequencies.csv" ]] || \
+     [[ -f "data/themes/theme_frequencies.csv" ]]; then
+    echo "Frequencies:      ✅ generated"
+  else
+    echo "Frequencies:      ⬜ not yet"
+  fi
+fi
+
+# S2.5 — Player theme profile status
+PLAYER_THEMES="data/player_themes"
+if [[ -d "$PLAYER_THEMES" ]]; then
+  echo ""
+  echo "=== S2.5: Player Theme Profiles ==="
+  if [[ -f "$PLAYER_THEMES/player_theme_profile.parquet" ]]; then
+    echo "Profile:          ✅ generated"
+  else
+    echo "Profile:          ⬜ not yet"
+  fi
+fi
+
 # Last log line
 if [[ -f logs/pipeline.log ]]; then
+  echo ""
   echo "Last log:         $(tail -1 logs/pipeline.log)"
 fi

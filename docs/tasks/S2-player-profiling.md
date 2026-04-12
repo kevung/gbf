@@ -133,3 +133,42 @@ python scripts/analyze_player_profiles.py \
 
 **Deliverable**: auto-generatable report template for any player in the
 database.
+
+---
+
+### S2.5 — Player Theme Profiling ✅
+
+**Objective**: Compute per-player performance metrics broken down by each
+of the 26 thematic position categories (S1.9).
+
+**Implementation**: `scripts/analyze_player_themes.py`
+
+**Input**: `positions_enriched/` (S0.4), `position_themes/` (S1.9),
+`matches.parquet`.
+**Output**:
+- `player_theme_profile.parquet` / `.csv` — long format: one row per
+  (player, theme). Metrics: positions, matches (sample support), avg_error,
+  error_rate (> 0.020), blunder_rate (> 0.080), avg_error_checker, pr_rating.
+- `player_theme_primary.csv` — per-player primary_theme counts.
+
+**Dependencies**: S0.4, S1.9, matches.parquet.
+**Complexity**: Medium.
+
+**Method**:
+1. Stream enriched + themes partitions (matched by filename), join with
+   player lookup (both POVs from matches.parquet).
+2. Filter: only players with ≥ 20 distinct matches.
+3. Group by (player, theme), compute: count, mean error, error_rate,
+   blunder_rate, PR rating (avg_error_checker × 500).
+4. Emit long-format parquet + CSV, sorted by player then support.
+
+**Usage**:
+```bash
+python scripts/analyze_player_themes.py \
+  --enriched data/parquet/positions_enriched \
+  --themes data/parquet/position_themes \
+  --parquet data/parquet \
+  --output data/player_themes \
+  --min-matches 20 \
+  --sample 10000000
+```

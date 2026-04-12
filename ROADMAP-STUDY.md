@@ -1,18 +1,18 @@
 # Backgammon Mining Study — Roadmap
 
-## Current Status — 2026-04-09
+## Current Status — 2026-04-12
 
 | Phase | Status | Fiches | Notes |
 |-------|--------|--------|-------|
 | S0 Data Infrastructure  | ✅ Complete | S0.1-S0.7 | All 7 fiches done — JSONL→Parquet→DuckDB→Features→Validation→Hashing→Graph |
-| S1 Exploration           | ✅ Complete | S1.1-S1.8 | All 8 fiches done — Stats→Correlation→Clustering→Anomaly→Volatility→Dice→Temporal→GraphTopology |
-| S2 Player Profiling      | ✅ Complete | S2.1-S2.4 | All 4 fiches done — Metrics→Clustering→Ranking→Strengths/Weaknesses |
+| S1 Exploration           | ✅ Complete | S1.1-S1.9 | All 9 fiches done — Stats→Correlation→Clustering→Anomaly→Volatility→Dice→Temporal→GraphTopology→Themes |
+| S2 Player Profiling      | ✅ Complete | S2.1-S2.5 | All 5 fiches done — Metrics→Clustering→Ranking→Strengths/Weaknesses→ThemeProfiles |
 | S3 Practical Rules       | 🔄 In progress | S3.1-S3.6 | S3.1-S3.5 ✅, S3.6 planned |
 | S4 Web Dashboard         | ⬜ Planned | S4.1-S4.7 | Views, architecture, board component, API, frontend, trajectories |
 
 ## Overview
 
-32 fiches across 5 phases. A parallel research track that mines 24 GB of
+34 fiches across 5 phases. A parallel research track that mines 24 GB of
 XG files (166K matches, ~160M positions) using a Python/Polars/DuckDB
 pipeline **independent from the GBF format** (M0-M10).
 
@@ -44,7 +44,9 @@ S0 Data Infrastructure
         │   │   │   └→ S1.8 Graph Topology (+ needs S0.7)
         │   │   ├→ S1.5 Volatility Analysis
         │   │   ├→ S1.6 Dice Analysis
-        │   │   └→ S1.7 Temporal Analysis
+        │   │   ├→ S1.7 Temporal Analysis
+        │   │   └→ S1.9 Thematic Position Classification
+        │   │       └→ S2.5 Player Theme Profiling
         │   │
         │   ├→ S2 Player Profiling
         │   │   ├→ S2.1 Player Metrics
@@ -78,11 +80,11 @@ S0 Data Infrastructure
 | Phase | Fiches | Complexity | Est. days (with Claude Code) |
 |-------|--------|-----------|------------------------------|
 | S0    | 7      | Medium-High | 8-12 |
-| S1    | 8      | High        | 12-18 |
-| S2    | 4      | Medium      | 5-8 |
+| S1    | 9      | High        | 14-20 |
+| S2    | 5      | Medium      | 6-10 |
 | S3    | 6      | High        | 8-12 |
 | S4    | 7      | Very High   | 18-25 |
-| **Total** | **32** | | **51-75** |
+| **Total** | **34** | | **54-79** |
 
 ## Execution Recommendations
 
@@ -137,7 +139,8 @@ matches), Parquet + DuckDB queries.
 ## S1 — Exploration & Pattern Discovery
 
 **Task sheets**: [S1-exploration-a.md](docs/tasks/S1-exploration-a.md) (S1.1-S1.4),
-[S1-exploration-b.md](docs/tasks/S1-exploration-b.md) (S1.5-S1.8)
+[S1-exploration-b.md](docs/tasks/S1-exploration-b.md) (S1.5-S1.8),
+[S1-exploration-c.md](docs/tasks/S1-exploration-c.md) (S1.9)
 
 | Fiche | Objective | Needs | Complexity |
 |-------|-----------|-------|------------|
@@ -149,6 +152,7 @@ matches), Parquet + DuckDB queries.
 | S1.6 ✅ | Dice structure analysis | S0.4 | Low-Med |
 | S1.7 ✅ | Temporal & sequential analysis (fatigue, tilt) | S0.3 | Medium |
 | S1.8 ✅ | Convergence & graph topology | S0.7, S1.3 | High |
+| S1.9 ✅ | Thematic position classification (26 themes) | S0.4 | High |
 
 **S1.1** — Error/equity/phase distributions, away score frequency, match/game
 lengths, top tournaments/players, temporal trends, cube value distribution.
@@ -177,6 +181,19 @@ error), divergence/convergence, degree distribution, betweenness centrality,
 Louvain communities, frequent 3-5 move paths, highways vs trails.
 Implementation: `scripts/analyze_graph_topology.py`.
 
+**S1.9** ✅ — Rule-based multi-label classifier: 26 canonical themes (Opening,
+Blitz, Priming, Back Games, Ace-Point, Race, Bearoff, etc.). Two-phase design:
+Phase A structural (23 themes + Connectivity + Hit-or-Not, per-partition Polars
+predicates) + Phase B trajectory (3 themes via game-ordered window expressions).
+Multi-label with priority-resolved primary_theme. Two new board-scan features:
+max_gap_p1 (Connectivity) and can_hit_this_roll_p1 (Hit-or-Not). 59 unit tests.
+Implementation: `scripts/classify_position_themes.py`,
+`scripts/lib/theme_rules.py`, `scripts/lib/board_predicates.py`.
+Dictionary: `docs/themes/theme_dictionary.md`.
+Task sheet: [S1-exploration-c.md](docs/tasks/S1-exploration-c.md).
+Outputs: `position_themes/` (partitioned parquet, 26 booleans + primary_theme +
+theme_count), `themes/theme_frequencies.csv`, `themes/theme_cooccurrence.csv`.
+
 ---
 
 ## S2 — Player Profiling
@@ -189,6 +206,7 @@ Implementation: `scripts/analyze_graph_topology.py`.
 | S2.2 ✅ | Player clustering by profile (archetypes) | S2.1 | Medium |
 | S2.3 ✅ | Benchmarking & player ranking | S2.1 | Medium |
 | S2.4 ✅ | Individual strengths/weaknesses analysis | S2.1, S1.3 | Medium |
+| S2.5 ✅ | Player theme profiling (per-theme performance) | S1.9, S2.1 | Medium |
 
 **S2.1** ✅ — Global performance (avg error, PR rating), phase profile
 (contact/race/bearoff/opening/midgame/endgame), cube profile (missed doubles,
@@ -222,6 +240,15 @@ cluster heatmap, and score-zone breakdown.
 Implementation: `scripts/analyze_strengths_weaknesses.py`.
 Outputs: `player_cluster_errors.parquet`, `player_zone_errors.parquet`,
 `strengths_weaknesses.csv`, `reports/<player>.txt`.
+
+**S2.5** ✅ — Per-player × per-theme performance profiling: joins S1.9
+position_themes with enriched data and player lookup (both POVs from
+matches.parquet). Computes: position count, distinct matches, avg error,
+error_rate (> 0.020), blunder_rate (> 0.080), avg_error_checker, PR rating
+(avg_error_checker × 500). Filter: ≥ 20 distinct matches.
+Implementation: `scripts/analyze_player_themes.py`.
+Outputs: `player_theme_profile.parquet`, `player_theme_profile.csv`,
+`player_theme_primary.csv`.
 
 ---
 

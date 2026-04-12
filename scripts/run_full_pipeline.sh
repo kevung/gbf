@@ -53,6 +53,8 @@ CLUSTERS_DIR="${OUTPUT_DIR}/clusters"
 PROFILES_DIR="${OUTPUT_DIR}/player_profiles"
 STATS_DIR="${OUTPUT_DIR}/stats"
 CUBE_DIR="${OUTPUT_DIR}/cube_analysis"
+THEMES_DIR="${PARQUET_DIR}/position_themes"
+PLAYER_THEMES_DIR="${OUTPUT_DIR}/player_themes"
 
 # ── Helpers ──────────────────────────────────────────────────────────
 log() { echo "[pipeline] $(date '+%H:%M:%S') $*"; }
@@ -323,6 +325,23 @@ if should_run "S1.8"; then
 fi
 
 # ═══════════════════════════════════════════════════════════════════════
+# S1.9 — Thematic Position Classification
+# ═══════════════════════════════════════════════════════════════════════
+if should_run "S1.9"; then
+  log "=== S1.9: Thematic Position Classification ==="
+  # Phase A — structural themes (23 structural + Connectivity + Hit-or-Not)
+  run python scripts/classify_position_themes.py \
+    --enriched "$ENRICHED_DIR" \
+    --output "$THEMES_DIR" \
+    --summary "${OUTPUT_DIR}/themes"
+  # Phase B — trajectory themes (Breaking Anchor, Post-Blitz, Post-Ace-Point)
+  run python scripts/classify_position_themes.py \
+    --enriched "$ENRICHED_DIR" \
+    --output "$THEMES_DIR" \
+    --trajectory
+fi
+
+# ═══════════════════════════════════════════════════════════════════════
 # S2.1 — Player Profiles
 # ═══════════════════════════════════════════════════════════════════════
 if should_run "S2.1"; then
@@ -367,6 +386,19 @@ if should_run "S2.4"; then
     --profiles "${PROFILES_DIR}/player_profiles.parquet" \
     --output "$PROFILES_DIR" \
     --sample 5000000
+fi
+
+# ═══════════════════════════════════════════════════════════════════════
+# S2.5 — Player Theme Profiling
+# ═══════════════════════════════════════════════════════════════════════
+if should_run "S2.5"; then
+  log "=== S2.5: Player Theme Profiling ==="
+  run python scripts/analyze_player_themes.py \
+    --enriched "$ENRICHED_DIR" \
+    --themes "$THEMES_DIR" \
+    --parquet "$PARQUET_DIR" \
+    --output "$PLAYER_THEMES_DIR" \
+    --sample 10000000
 fi
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -448,6 +480,7 @@ log "=== Pipeline complete ==="
 log "Disk free: $(disk_free) GB"
 log "Output summary:"
 du -sh "$PARQUET_DIR" "$ENRICHED_DIR" "$CLUSTERS_DIR" "$PROFILES_DIR" \
-      "$STATS_DIR" "$CUBE_DIR" "${OUTPUT_DIR}/anomalies" \
+      "$STATS_DIR" "$CUBE_DIR" "$THEMES_DIR" "$PLAYER_THEMES_DIR" \
+      "${OUTPUT_DIR}/themes" "${OUTPUT_DIR}/anomalies" \
       "${OUTPUT_DIR}/volatility" "${OUTPUT_DIR}/dice" \
       "${OUTPUT_DIR}/temporal" "${OUTPUT_DIR}/graph_topology" 2>/dev/null || true

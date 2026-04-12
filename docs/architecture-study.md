@@ -32,8 +32,8 @@ positions.
     v    v    v    v
   S0.5  S0.6  S1   S2/S3
   QA    Hash  Exploration  Profiling/Rules
-         |
-         v
+         |         |
+         v         ├→ S1.9 Themes → S2.5 Player Theme Profiles
 +-------------------+
 |  Trajectory Graph |  edges.parquet, node metrics (S0.7)
 +--------+----------+
