@@ -82,7 +82,7 @@ def load_slice(
         sys.exit(f"No enriched partitions in {enriched_dir}")
 
     enriched_cols = [
-        "position_id", "match_id", "player_on_roll",
+        "position_id", "game_id", "match_id", "player_on_roll",
         "decision_type", "move_played_error",
     ]
 
@@ -99,6 +99,12 @@ def load_slice(
         except Exception as exc:
             print(f"  [warn] {f.name}: {exc}", file=sys.stderr)
             continue
+
+        # Derive match_id from game_id when not present.
+        if "match_id" not in enr.columns and "game_id" in enr.columns:
+            enr = enr.with_columns(
+                pl.col("game_id").str.replace(r"_game_\d+$", "").alias("match_id")
+            )
 
         theme_probe = pl.read_parquet(themes_file, n_rows=1).columns
         theme_cols = (

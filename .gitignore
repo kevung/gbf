@@ -21,8 +21,13 @@ data/cube_analysis/
 data/dice/
 data/graph_topology/
 data/player_profiles/
+data/player_themes/
 data/stats/
 data/temporal/
+data/themes/
 data/volatility/
 logs/
 tests/__pycache__/
+
+# Visualization outputs (generated, not versioned)
+viz/
