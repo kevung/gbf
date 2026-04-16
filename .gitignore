@@ -26,6 +26,7 @@ data/stats/
 data/temporal/
 data/themes/
 data/volatility/
+data/barycentric/
 logs/
 tests/__pycache__/
 
