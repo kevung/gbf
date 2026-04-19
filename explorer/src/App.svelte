@@ -6,15 +6,17 @@
   import Projection from './views/Projection.svelte';
   import Explorer from './views/Explorer.svelte';
   import Themes from './views/Themes.svelte';
-  import Help from './views/Help.svelte';
+  import Help        from './views/Help.svelte';
+  import Barycentric from './views/Barycentric.svelte';
 
   const views = [
-    { id: 'setup', label: 'Setup', icon: '⚙️' },
-    { id: 'dashboard', label: 'Dashboard', icon: '📊' },
-    { id: 'projection', label: 'Projections', icon: '🗺️' },
-    { id: 'explorer', label: 'Explorer', icon: '📈' },
-    { id: 'themes', label: 'Themes', icon: '🎯' },
-    { id: 'help', label: 'Help', icon: '❓' },
+    { id: 'setup',        label: 'Setup',        icon: '⚙️' },
+    { id: 'dashboard',    label: 'Dashboard',    icon: '📊' },
+    { id: 'projection',   label: 'Projections',  icon: '🗺️' },
+    { id: 'explorer',     label: 'Explorer',     icon: '📈' },
+    { id: 'themes',       label: 'Themes',       icon: '🎯' },
+    { id: 'barycentric',  label: 'Barycentric',  icon: '△' },
+    { id: 'help',         label: 'Help',         icon: '❓' },
   ];
 
   let currentView = $state('setup');
@@ -73,6 +75,9 @@
     </div>
     <div class="view-pane" class:hidden={currentView !== 'themes'}>
       <Themes active={currentView === 'themes'} />
+    </div>
+    <div class="view-pane" class:hidden={currentView !== 'barycentric'}>
+      <Barycentric />
     </div>
     <div class="view-pane" class:hidden={currentView !== 'help'}>
       <Help />

@@ -88,6 +88,22 @@ Import is progressive: one region (~33K files) first, then region by region.
 
 See ROADMAP.md for the detailed implementation plan.
 
+### Barycentric Explorer
+
+After running the full pipeline, launch the interactive tool:
+
+    ./scripts/run_barycentric_stack.sh
+
+Then open <http://localhost:5173> and navigate to **Barycentric**.
+Three views are available:
+
+- **Global scatter** — every position's barycenter in score space;
+  draw a rectangle to select positions and inspect them as board cards.
+- **Score clouds** — per-cell barycenter scatter, with CRA and PCR
+  variants shown separately at 1-away scores.
+- **Match trajectory** — click any point to trace the entire match it
+  belongs to, with MWC evolution plotted in a companion chart.
+
 ## Documentation
 
 - [SPEC.md](SPEC.md) — Binary format specification (v1.0-draft)

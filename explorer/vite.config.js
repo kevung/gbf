@@ -5,6 +5,10 @@ export default defineConfig({
   plugins: [svelte()],
   server: {
     proxy: {
+      '/api/bary': {
+        target: 'http://localhost:8100',
+        changeOrigin: true,
+      },
       '/api': 'http://localhost:8080',
     },
   },

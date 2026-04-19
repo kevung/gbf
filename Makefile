@@ -19,7 +19,7 @@ GO_CMD       := cmd/explorer
 LDFLAGS := -s -w
 GOFLAGS := -trimpath
 
-.PHONY: all clean dev build build-linux build-windows ui bary-service help
+.PHONY: all clean dev build build-linux build-windows ui bary-service bary-stack help
 
 # Default: build for current platform.
 build: ui go-build
@@ -71,6 +71,9 @@ clean:
 	rm -rf $(STATIC_DIR)
 	rm -rf $(EXPLORER_DIR)/dist
 	rm -rf $(EXPLORER_DIR)/node_modules
+
+bary-stack:
+	./scripts/run_barycentric_stack.sh
 
 bary-service:
 	python scripts/barycentric_service.py \
